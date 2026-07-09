@@ -1,5 +1,6 @@
 mod cli;
 mod commands;
+mod crypto;
 mod manifest;
 mod scan;
 

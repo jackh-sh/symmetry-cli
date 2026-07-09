@@ -76,6 +76,6 @@ fn update_gitignore(root: &Path) -> Result<()> {
     }
     out.push_str(GITIGNORE_BLOCK);
     std::fs::write(&path, out).context("failed to update .gitignore")?;
-    println!("Updated .gitignore ({} stays ignored, *.enc gets committed)", ".env*");
+    println!("Updated .gitignore (plaintext env files stay ignored, *.enc gets committed)");
     Ok(())
 }

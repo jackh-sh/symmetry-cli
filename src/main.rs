@@ -1,6 +1,8 @@
 mod cli;
 mod commands;
 mod crypto;
+mod envfile;
+mod keystore;
 mod manifest;
 mod scan;
 

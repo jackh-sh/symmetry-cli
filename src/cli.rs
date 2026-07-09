@@ -56,6 +56,32 @@ pub enum Command {
     },
     /// Show the encryption state of each managed env file
     Status,
+    /// List the variables in the env files under a directory (or one file)
+    Show {
+        /// Directory or env file to inspect (default: the current directory)
+        path: Option<PathBuf>,
+        /// Print full values instead of masking them
+        #[arg(long)]
+        reveal: bool,
+    },
+    /// Set or add a variable, re-encrypting the file in place
+    Set {
+        /// Variable name, e.g. DATABASE_URL
+        key: String,
+        /// Value to store
+        value: String,
+        /// Env file to edit (default: the one nearest to the current directory)
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// Remove a variable, re-encrypting the file in place
+    Unset {
+        /// Variable name to remove
+        key: String,
+        /// Env file to edit (default: the one nearest to the current directory)
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
     /// Export or import the project encryption key
     Key {
         #[command(subcommand)]

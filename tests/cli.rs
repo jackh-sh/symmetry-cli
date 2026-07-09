@@ -203,6 +203,104 @@ fn status_reports_lock_state_and_unmanaged_files() {
 }
 
 #[test]
+fn show_masks_values_and_reveal_prints_them() {
+    let tmp = setup_project();
+    let root = tmp.path();
+    symmetry(root).arg("encrypt").assert().success();
+
+    symmetry(&root.join("apps/web"))
+        .arg("show")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("apps/web/.env (locked)")
+                .and(predicate::str::contains("WEB_VAR"))
+                .and(predicate::str::contains("hello-web").not()),
+        );
+
+    symmetry(&root.join("apps/web"))
+        .args(["show", "--reveal"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hello-web").and(predicate::str::contains("two words")));
+}
+
+#[test]
+fn show_scopes_to_the_given_path() {
+    let tmp = setup_project();
+    let root = tmp.path();
+    symmetry(root).arg("encrypt").assert().success();
+
+    symmetry(root)
+        .args(["show", "apps/api/.env"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("API_VAR").and(predicate::str::contains("WEB_VAR").not()),
+        );
+}
+
+#[test]
+fn set_updates_an_encrypted_file_in_place() {
+    let tmp = setup_project();
+    let root = tmp.path();
+    symmetry(root).arg("encrypt").assert().success();
+
+    symmetry(&root.join("apps/api"))
+        .args(["set", "NEW_KEY", "with spaces & $pecial"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("set NEW_KEY in apps/api/.env (encrypted)"));
+
+    symmetry(&root.join("apps/api"))
+        .args(["run", "--", "sh", "-c", "echo [$NEW_KEY] [$API_VAR]"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[with spaces & $pecial] [hello-api]"));
+}
+
+#[test]
+fn set_edits_plaintext_files_before_encryption() {
+    let tmp = setup_project();
+    let root = tmp.path();
+
+    symmetry(root)
+        .args(["set", "LOG_LEVEL", "trace", "--file", ".env"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("plaintext"));
+    assert!(
+        fs::read_to_string(root.join(".env"))
+            .unwrap()
+            .contains("LOG_LEVEL=trace")
+    );
+}
+
+#[test]
+fn unset_removes_a_variable() {
+    let tmp = setup_project();
+    let root = tmp.path();
+    symmetry(root).arg("encrypt").assert().success();
+
+    symmetry(&root.join("apps/web"))
+        .args(["unset", "QUOTED"])
+        .assert()
+        .success();
+
+    symmetry(&root.join("apps/web"))
+        .args(["run", "--", "sh", "-c", "echo [${QUOTED:-gone}]"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[gone]"));
+
+    symmetry(&root.join("apps/web"))
+        .args(["unset", "QUOTED"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not set"));
+}
+
+#[test]
 fn encrypt_adds_new_files_to_manifest() {
     let tmp = setup_project();
     let root = tmp.path();

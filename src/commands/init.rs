@@ -1,10 +1,12 @@
-use std::path::Path;
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use zeroize::Zeroize;
 
+use crate::commands::encrypt::encrypt_targets;
 use crate::crypto::{self, KEY_LEN};
-use crate::keystore;
+use crate::keystore::{self, KeySource};
 use crate::manifest::{MANIFEST_NAME, Manifest, find_root};
 use crate::scan;
 
@@ -18,7 +20,7 @@ const GITIGNORE_BLOCK: &str = "\
 !.env.template
 ";
 
-pub fn init(password: bool) -> Result<()> {
+pub fn init(password: bool, yes: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     if let Some(existing) = find_root(&cwd) {
         bail!(
@@ -26,11 +28,29 @@ pub fn init(password: bool) -> Result<()> {
             existing.join(MANIFEST_NAME).display()
         );
     }
+    let interactive = !yes && std::io::stdin().is_terminal();
 
-    let files = scan::scan(&cwd)?;
-    let manifest = Manifest::new(files.clone());
+    let found = scan::scan(&cwd)?;
+    let selected = choose_files(found, interactive)?;
+    let manifest = Manifest::new(selected.clone());
 
-    if password {
+    let use_password = if password {
+        true
+    } else if interactive {
+        let choice = dialoguer::Select::new()
+            .with_prompt("Where should the encryption key live?")
+            .items(&[
+                "System keychain (recommended): random key, unlocked with your login",
+                "Password (less secure): you type it every time symmetry needs the key",
+            ])
+            .default(0)
+            .interact()?;
+        choice == 1
+    } else {
+        false
+    };
+
+    if use_password {
         println!("Password mode: you'll choose a password the first time you encrypt.");
     } else {
         let mut key = crypto::random_bytes::<KEY_LEN>();
@@ -49,16 +69,52 @@ pub fn init(password: bool) -> Result<()> {
     println!("Wrote {MANIFEST_NAME}");
     update_gitignore(&cwd)?;
 
-    if files.is_empty() {
+    if selected.is_empty() {
         println!("No .env files found. Create one and run `symmetry encrypt <path>` to manage it.");
+        return Ok(());
+    }
+    println!("Managing {} env file(s):", selected.len());
+    for file in &selected {
+        println!("  {}", file.display());
+    }
+
+    let encrypt_now = if yes {
+        true
+    } else if interactive {
+        dialoguer::Confirm::new()
+            .with_prompt(format!(
+                "Encrypt {} file(s) now? Plaintext will be replaced by .enc files",
+                selected.len()
+            ))
+            .default(true)
+            .interact()?
     } else {
-        println!("Managing {} env file(s):", files.len());
-        for file in &files {
-            println!("  {}", file.display());
-        }
-        println!("Run `symmetry encrypt` to encrypt them.");
+        false
+    };
+
+    if encrypt_now {
+        let mut keys = KeySource::new(&manifest.project_id);
+        encrypt_targets(&cwd, &mut keys, &selected, false)?;
+    } else {
+        println!("Run `symmetry encrypt` when you're ready to encrypt them.");
     }
     Ok(())
+}
+
+fn choose_files(found: Vec<PathBuf>, interactive: bool) -> Result<Vec<PathBuf>> {
+    if found.len() <= 1 || !interactive {
+        return Ok(found);
+    }
+    let items: Vec<String> = found.iter().map(|p| p.display().to_string()).collect();
+    let picks = dialoguer::MultiSelect::new()
+        .with_prompt("Select the env files to manage (space toggles, enter confirms)")
+        .items(&items)
+        .defaults(&vec![true; items.len()])
+        .interact()?;
+    if picks.is_empty() {
+        bail!("no env files selected");
+    }
+    Ok(picks.into_iter().map(|i| found[i].clone()).collect())
 }
 
 fn update_gitignore(root: &Path) -> Result<()> {

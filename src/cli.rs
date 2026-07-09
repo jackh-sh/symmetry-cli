@@ -20,6 +20,9 @@ pub enum Command {
         /// Use a password instead of storing a key in the system keychain
         #[arg(long)]
         password: bool,
+        /// Skip prompts: manage every env file found and encrypt immediately
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
     /// Encrypt env files to .enc siblings (alias: lock)
     #[command(alias = "lock")]

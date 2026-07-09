@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -27,11 +27,26 @@ pub fn encrypt(paths: Vec<PathBuf>, keep: bool) -> Result<()> {
     }
 
     let mut keys = KeySource::new(&manifest.project_id);
+    let encrypted = encrypt_targets(&root, &mut keys, &targets, keep)?;
+    if encrypted > 0 && keep {
+        println!("Plaintext files kept (--keep); remember they're still on disk.");
+    }
+    Ok(())
+}
+
+/// Encrypt each target (root-relative) to its .enc sibling, removing the
+/// plaintext unless `keep`. Also used by `init` for encrypt-on-setup.
+pub(super) fn encrypt_targets(
+    root: &Path,
+    keys: &mut KeySource,
+    targets: &[PathBuf],
+    keep: bool,
+) -> Result<usize> {
     let keychain_key = keys.try_keychain();
 
     let mut encrypted = 0usize;
     for rel in targets {
-        let plain = root.join(&rel);
+        let plain = root.join(rel);
         let enc = enc_path(&plain);
         if !plain.exists() {
             if enc.exists() {
@@ -44,7 +59,7 @@ pub fn encrypt(paths: Vec<PathBuf>, keep: bool) -> Result<()> {
 
         let plaintext = std::fs::read(&plain)
             .with_context(|| format!("failed to read {}", plain.display()))?;
-        let aad = aad_for(&rel);
+        let aad = aad_for(rel);
         let encfile = match keychain_key {
             Some(key) => crypto::seal(&key, &plaintext, &aad, KeyMode::Keychain)?,
             None => {
@@ -63,9 +78,5 @@ pub fn encrypt(paths: Vec<PathBuf>, keep: bool) -> Result<()> {
         println!("encrypted {} -> {}.enc", rel.display(), rel.display());
         encrypted += 1;
     }
-
-    if encrypted > 0 && keep {
-        println!("Plaintext files kept (--keep); remember they're still on disk.");
-    }
-    Ok(())
+    Ok(encrypted)
 }

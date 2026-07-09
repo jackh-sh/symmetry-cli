@@ -15,7 +15,7 @@ use crate::keystore::KeySource;
 
 pub fn dispatch(command: Command) -> Result<()> {
     match command {
-        Command::Init { password } => init::init(password),
+        Command::Init { password, yes } => init::init(password, yes),
         Command::Encrypt { paths, keep } => encrypt::encrypt(paths, keep),
         Command::Decrypt { paths, force } => decrypt::decrypt(paths, force),
         Command::Run { file, all, command } => run::run(file, all, command),

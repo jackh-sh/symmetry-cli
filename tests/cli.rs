@@ -49,6 +49,20 @@ fn init_writes_manifest_and_gitignore() {
 }
 
 #[test]
+fn init_yes_encrypts_immediately() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::write(root.join(".env"), "A=1\n").unwrap();
+
+    symmetry(root)
+        .args(["init", "--password", "--yes"])
+        .assert()
+        .success();
+    assert!(!root.join(".env").exists());
+    assert!(root.join(".env.enc").exists());
+}
+
+#[test]
 fn encrypt_replaces_plaintext_and_decrypt_restores_it() {
     let tmp = setup_project();
     let root = tmp.path();

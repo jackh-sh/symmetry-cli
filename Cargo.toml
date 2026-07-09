@@ -3,4 +3,27 @@ name = "symmetry-cli"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "symmetry"
+path = "src/main.rs"
+
 [dependencies]
+anyhow = "1"
+argon2 = "0.5"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+clap = { version = "4", features = ["derive"] }
+dotenvy = "0.15"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+rand = "0.8"
+rpassword = "7"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+uuid = { version = "1", features = ["v4"] }
+walkdir = "2"
+zeroize = "1"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"

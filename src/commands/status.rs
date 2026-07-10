@@ -1,11 +1,22 @@
 use anyhow::Result;
 
 use crate::commands::enc_path;
+use crate::keystore;
 use crate::manifest::require_project;
 use crate::scan;
 
 pub fn status() -> Result<()> {
     let (root, manifest) = require_project()?;
+
+    match keystore::load_key(&manifest.project_id) {
+        Ok(Some(stored)) if stored.strict => {
+            println!("Key: system keychain (strict mode: verification on every use)")
+        }
+        Ok(Some(_)) => println!("Key: system keychain"),
+        Ok(None) => println!("Key: none in keychain (password mode, or run `symmetry key import`)"),
+        Err(err) => eprintln!("warning: {err:#}"),
+    }
+    println!();
 
     if manifest.files.is_empty() {
         println!("No env files in the manifest.");

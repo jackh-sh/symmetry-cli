@@ -42,7 +42,7 @@ pub(super) fn encrypt_targets(
     targets: &[PathBuf],
     keep: bool,
 ) -> Result<usize> {
-    let keychain_key = keys.try_keychain();
+    let keychain_key = keys.try_keychain()?;
 
     let mut encrypted = 0usize;
     for rel in targets {

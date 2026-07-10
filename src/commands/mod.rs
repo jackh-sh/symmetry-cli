@@ -18,7 +18,7 @@ use crate::manifest::{Manifest, rel_to_root};
 
 pub fn dispatch(command: Command) -> Result<()> {
     match command {
-        Command::Init { password, yes } => init::init(password, yes),
+        Command::Init { password, strict, yes } => init::init(password, strict, yes),
         Command::Encrypt { paths, keep } => encrypt::encrypt(paths, keep),
         Command::Decrypt { paths, force } => decrypt::decrypt(paths, force),
         Command::Run { file, all, command } => run::run(file, all, command),
@@ -28,7 +28,8 @@ pub fn dispatch(command: Command) -> Result<()> {
         Command::Unset { key, file } => var::unset(&key, file),
         Command::Key { action } => match action {
             KeyAction::Export => key::export(),
-            KeyAction::Import { key } => key::import(&key),
+            KeyAction::Import { key, strict } => key::import(&key, strict),
+            KeyAction::Strict { mode } => key::strict(mode),
         },
     }
 }

@@ -20,6 +20,10 @@ pub enum Command {
         /// Use a password instead of storing a key in the system keychain
         #[arg(long)]
         password: bool,
+        /// Strict mode: require Touch ID / Windows Hello / account password
+        /// every time the keychain key is used
+        #[arg(long, conflicts_with = "password")]
+        strict: bool,
         /// Skip prompts: manage every env file found and encrypt immediately
         #[arg(long, short = 'y')]
         yes: bool,
@@ -97,5 +101,19 @@ pub enum KeyAction {
     Import {
         /// Base64 key from `symmetry key export`
         key: String,
+        /// Enable strict mode (biometric/user verification on every use)
+        #[arg(long)]
+        strict: bool,
     },
+    /// Turn strict mode (user verification on every key use) on or off
+    Strict {
+        #[arg(value_enum)]
+        mode: StrictMode,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum StrictMode {
+    On,
+    Off,
 }

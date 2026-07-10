@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use zeroize::Zeroize;
 
+use crate::auth;
 use crate::commands::encrypt::encrypt_targets;
 use crate::crypto::{self, KEY_LEN};
 use crate::keystore::{self, KeySource};
@@ -20,7 +21,12 @@ const GITIGNORE_BLOCK: &str = "\
 !.env.template
 ";
 
-pub fn init(password: bool, yes: bool) -> Result<()> {
+enum KeyChoice {
+    Keychain { strict: bool },
+    Password,
+}
+
+pub fn init(password: bool, strict: bool, yes: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     if let Some(existing) = find_root(&cwd) {
         bail!(
@@ -34,33 +40,56 @@ pub fn init(password: bool, yes: bool) -> Result<()> {
     let selected = choose_files(found, interactive)?;
     let manifest = Manifest::new(selected.clone());
 
-    let use_password = if password {
-        true
+    let choice = if password {
+        KeyChoice::Password
+    } else if strict {
+        require_strict_support()?;
+        KeyChoice::Keychain { strict: true }
     } else if interactive {
-        let choice = dialoguer::Select::new()
+        let mut items = vec![
+            "System keychain (recommended): random key, unlocked with your login",
+            "Password (less secure): you type it every time symmetry needs the key",
+        ];
+        if auth::supported() {
+            items.insert(
+                1,
+                "System keychain, strict: Touch ID / Windows Hello / account password on every use",
+            );
+        }
+        let picked = dialoguer::Select::new()
             .with_prompt("Where should the encryption key live?")
-            .items(&[
-                "System keychain (recommended): random key, unlocked with your login",
-                "Password (less secure): you type it every time symmetry needs the key",
-            ])
+            .items(&items)
             .default(0)
             .interact()?;
-        choice == 1
+        if picked == items.len() - 1 {
+            KeyChoice::Password
+        } else {
+            KeyChoice::Keychain { strict: picked == 1 }
+        }
     } else {
-        false
+        KeyChoice::Keychain { strict: false }
     };
 
-    if use_password {
-        println!("Password mode: you'll choose a password the first time you encrypt.");
-    } else {
-        let mut key = crypto::random_bytes::<KEY_LEN>();
-        let stored = keystore::store_key(&manifest.project_id, &key);
-        key.zeroize();
-        match stored {
-            Ok(()) => println!("Generated an encryption key and stored it in the system keychain."),
-            Err(err) => {
-                eprintln!("warning: {err:#}");
-                println!("Falling back to password mode: you'll choose a password when encrypting.");
+    match choice {
+        KeyChoice::Password => {
+            println!("Password mode: you'll choose a password the first time you encrypt.");
+        }
+        KeyChoice::Keychain { strict } => {
+            let mut key = crypto::random_bytes::<KEY_LEN>();
+            let stored = keystore::store_key(&manifest.project_id, &key, strict);
+            key.zeroize();
+            match stored {
+                Ok(()) if strict => println!(
+                    "Generated an encryption key in the system keychain (strict mode: \
+                     every use requires user verification)."
+                ),
+                Ok(()) => println!(
+                    "Generated an encryption key and stored it in the system keychain."
+                ),
+                Err(err) => {
+                    eprintln!("warning: {err:#}");
+                    println!("Falling back to password mode: you'll choose a password when encrypting.");
+                }
             }
         }
     }
@@ -97,6 +126,13 @@ pub fn init(password: bool, yes: bool) -> Result<()> {
         encrypt_targets(&cwd, &mut keys, &selected, false)?;
     } else {
         println!("Run `symmetry encrypt` when you're ready to encrypt them.");
+    }
+    Ok(())
+}
+
+pub(super) fn require_strict_support() -> Result<()> {
+    if !auth::supported() {
+        bail!("strict mode is not supported on this platform yet (macOS and Windows only)");
     }
     Ok(())
 }

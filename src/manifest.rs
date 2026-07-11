@@ -56,7 +56,7 @@ impl Manifest {
     pub fn save(&self, root: &Path) -> Result<()> {
         let path = root.join(MANIFEST_NAME);
         let text = toml::to_string_pretty(self).context("failed to serialize manifest")?;
-        std::fs::write(&path, text).with_context(|| format!("failed to write {}", path.display()))
+        crate::fsutil::write_atomic(&path, text.as_bytes(), false)
     }
 
     pub fn contains(&self, rel: &Path) -> bool {

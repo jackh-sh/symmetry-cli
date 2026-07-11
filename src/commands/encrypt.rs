@@ -84,8 +84,7 @@ pub(super) fn encrypt_targets(
                 crypto::seal(&key, &plaintext, &aad, mode)?
             }
         };
-        std::fs::write(&enc, encfile.render())
-            .with_context(|| format!("failed to write {}", enc.display()))?;
+        crate::fsutil::write_atomic(&enc, encfile.render().as_bytes(), false)?;
         if !keep {
             std::fs::remove_file(&plain)
                 .with_context(|| format!("failed to remove {}", plain.display()))?;

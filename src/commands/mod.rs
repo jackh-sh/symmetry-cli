@@ -95,8 +95,7 @@ pub fn seal_entry(
     };
     let encfile = crypto::seal(&key, plaintext, &aad_for(rel), mode.clone())?;
     let path = enc_path(&root.join(rel));
-    std::fs::write(&path, encfile.render())
-        .with_context(|| format!("failed to write {}", path.display()))
+    crate::fsutil::write_atomic(&path, encfile.render().as_bytes(), false)
 }
 
 /// Resolve which env file a command should act on: an explicit --file, or

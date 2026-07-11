@@ -3,29 +3,35 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-/// Write a file containing secrets, readable only by the current user
-/// (0600 on Unix). Tightens the permissions of an existing file too.
+/// Write `bytes` to `path` atomically: a temp file in the same directory is
+/// synced and renamed over the target, so a crash mid-write can't destroy
+/// the existing file or leave a truncated one. `secret` restricts the file
+/// to the current user (0600 on Unix).
+pub fn write_atomic(path: &Path, bytes: &[u8], secret: bool) -> Result<()> {
+    let write = || -> Result<()> {
+        let dir = match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        };
+        let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = if secret { 0o600 } else { 0o644 };
+            tmp.as_file()
+                .set_permissions(std::fs::Permissions::from_mode(mode))?;
+        }
+        tmp.write_all(bytes)?;
+        tmp.as_file().sync_all()?;
+        tmp.persist(path)?;
+        Ok(())
+    };
+    write().with_context(|| format!("failed to write {}", path.display()))
+}
+
+/// Write a file containing secrets, readable only by the current user.
 pub fn write_secret(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut file = opts
-        .open(path)
-        .with_context(|| format!("failed to write {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // OpenOptions::mode only applies to newly created files; make sure a
-        // pre-existing plaintext file ends up locked down as well.
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("failed to set permissions on {}", path.display()))?;
-    }
-    file.write_all(bytes)
-        .with_context(|| format!("failed to write {}", path.display()))
+    write_atomic(path, bytes, true)
 }
 
 #[cfg(test)]
@@ -51,5 +57,16 @@ mod tests {
         let mode = std::fs::metadata(&existing).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(std::fs::read(&existing).unwrap(), b"NEW=1\n");
+    }
+
+    #[test]
+    fn atomic_write_replaces_existing_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("file.enc");
+        write_atomic(&path, b"one", false).unwrap();
+        write_atomic(&path, b"two", false).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"two");
+        // No temp file debris left behind.
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 1);
     }
 }

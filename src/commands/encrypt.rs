@@ -11,17 +11,14 @@ use crate::ui;
 pub fn encrypt(paths: Vec<PathBuf>, keep: bool) -> Result<()> {
     let (root, mut manifest) = require_project()?;
 
-    let targets = if paths.is_empty() {
-        manifest.paths()
+    let explicit = !paths.is_empty();
+    let targets = if explicit {
+        paths
+            .into_iter()
+            .map(|p| Ok(strip_enc(rel_to_root(&root, &p)?)))
+            .collect::<Result<Vec<_>>>()?
     } else {
-        let mut targets = Vec::new();
-        for path in paths {
-            let rel = strip_enc(rel_to_root(&root, &path)?);
-            manifest.add(rel.clone());
-            targets.push(rel);
-        }
-        manifest.save(&root)?;
-        targets
+        manifest.paths()
     };
     if targets.is_empty() {
         bail!("no env files in the manifest; pass paths to encrypt, e.g. `symmetry encrypt .env`");
@@ -29,6 +26,22 @@ pub fn encrypt(paths: Vec<PathBuf>, keep: bool) -> Result<()> {
 
     let mut keys = KeySource::new(&manifest.project_id);
     let encrypted = encrypt_targets(&root, &mut keys, &targets, keep)?;
+
+    // Record explicitly passed paths only once they have an .enc file, so a
+    // failed run or a typo'd path doesn't end up in the manifest.
+    if explicit {
+        let mut changed = false;
+        for rel in &targets {
+            if enc_path(&root.join(rel)).exists() && !manifest.contains(rel) {
+                manifest.add(rel.clone());
+                changed = true;
+            }
+        }
+        if changed {
+            manifest.save(&root)?;
+        }
+    }
+
     if encrypted > 0 && keep {
         ui::warn("Plaintext files kept (--keep); remember they're still on disk.");
     }

@@ -77,9 +77,13 @@ pub fn show(path: Option<PathBuf>, reveal: bool) -> Result<()> {
     Ok(())
 }
 
+/// Below this length, showing any characters gives away too much of the
+/// value, so it is masked entirely.
+const MASK_HINT_MIN_LEN: usize = 10;
+
 fn mask(value: &str) -> String {
     let count = value.chars().count();
-    if count <= 4 {
+    if count < MASK_HINT_MIN_LEN {
         return "••••".to_string();
     }
     let first: String = value.chars().take(2).collect();
@@ -94,6 +98,10 @@ mod tests {
     #[test]
     fn masks_values() {
         assert_eq!(mask("abc"), "••••");
+        // short secrets are fully masked: a prefix/suffix hint would reveal
+        // most of the value
+        assert_eq!(mask("hunter2"), "••••");
+        assert_eq!(mask("secretpw9"), "••••");
         assert_eq!(mask("sk_test_abc123"), "sk••••••••••23");
         // long values don't leak their exact length
         assert_eq!(mask(&"x".repeat(100)), format!("xx{}xx", "•".repeat(12)));

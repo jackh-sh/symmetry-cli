@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::commands::{aad_for, enc_path, strip_enc};
 use crate::crypto::{self, KdfParams, KeyMode, SALT_LEN};
-use crate::keystore::KeySource;
+use crate::keystore::{KeySource, PASSWORD_ENV};
 use crate::manifest::{rel_to_root, require_project};
 use crate::ui;
 
@@ -43,7 +43,23 @@ pub(super) fn encrypt_targets(
     targets: &[PathBuf],
     keep: bool,
 ) -> Result<usize> {
-    let keychain_key = keys.try_keychain()?;
+    // No key in a working keychain means password mode. A keychain *error*
+    // must not silently downgrade the project to password encryption; only
+    // an explicit SYMMETRY_PASSWORD (e.g. keychain-less CI) allows that.
+    let keychain_key = match keys.try_keychain() {
+        Ok(key) => key,
+        Err(err) if keys.keychain_errored() && std::env::var_os(PASSWORD_ENV).is_some() => {
+            ui::warn(format!("{err:#}; using password mode ({PASSWORD_ENV} is set)"));
+            None
+        }
+        Err(err) if keys.keychain_errored() => {
+            return Err(err.context(format!(
+                "cannot read the system keychain; fix it, or set {PASSWORD_ENV} to encrypt \
+                 with a password instead"
+            )));
+        }
+        Err(err) => return Err(err),
+    };
 
     let mut encrypted = 0usize;
     for rel in targets {

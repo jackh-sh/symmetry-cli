@@ -70,7 +70,7 @@ pub fn load_key(project_id: &str) -> Result<Option<StoredKey>> {
 /// once, and enforces strict-mode user verification before key release.
 pub struct KeySource {
     project_id: String,
-    keychain: Option<Option<StoredKey>>,
+    keychain: Option<Result<Option<StoredKey>, String>>,
     verified: bool,
     password: Option<String>,
 }
@@ -85,24 +85,27 @@ impl KeySource {
         }
     }
 
-    fn load(&mut self) -> Option<StoredKey> {
-        if self.keychain.is_none() {
-            self.keychain = Some(match load_key(&self.project_id) {
-                Ok(stored) => stored,
-                Err(err) => {
-                    eprintln!("warning: {err:#}");
-                    None
-                }
-            });
+    fn load(&mut self) -> Result<Option<StoredKey>> {
+        // anyhow::Error isn't Clone, so cache the rendered message.
+        let cached = self
+            .keychain
+            .get_or_insert_with(|| load_key(&self.project_id).map_err(|err| format!("{err:#}")));
+        match cached {
+            Ok(stored) => Ok(*stored),
+            Err(msg) => bail!("{msg}"),
         }
-        self.keychain.unwrap()
     }
 
-    /// The keychain key, or None if the keychain is empty or unavailable
-    /// (unavailability is reported once as a warning). Strict keys require
-    /// passing OS user verification, once per invocation.
+    /// Whether the keychain itself failed (as opposed to holding no key).
+    pub fn keychain_errored(&self) -> bool {
+        matches!(self.keychain, Some(Err(_)))
+    }
+
+    /// The keychain key, None if the keychain works but holds no key for
+    /// this project, or Err if the keychain is unavailable. Strict keys
+    /// require passing OS user verification, once per invocation.
     pub fn try_keychain(&mut self) -> Result<Option<[u8; KEY_LEN]>> {
-        let Some(stored) = self.load() else {
+        let Some(stored) = self.load()? else {
             return Ok(None);
         };
         if stored.strict && !self.verified {
@@ -148,7 +151,7 @@ impl KeySource {
 
 impl Drop for KeySource {
     fn drop(&mut self) {
-        if let Some(Some(mut stored)) = self.keychain.take() {
+        if let Some(Ok(Some(mut stored))) = self.keychain.take() {
             stored.key.zeroize();
         }
         if let Some(mut pw) = self.password.take() {

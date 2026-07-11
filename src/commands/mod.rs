@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::cli::{Command, KeyAction};
-use crate::crypto::{self, EncFile, KeyMode, SALT_LEN};
+use crate::crypto::{self, EncFile, KdfParams, KeyMode, SALT_LEN};
 use crate::keystore::KeySource;
 use crate::manifest::{Manifest, rel_to_root};
 
@@ -72,9 +72,9 @@ pub fn decrypt_entry_full(
     let enc = EncFile::parse(&text).with_context(|| format!("in {}", path.display()))?;
     let (key, password_mode) = match enc.mode {
         KeyMode::Keychain => (keys.require_keychain()?, false),
-        KeyMode::Password { salt } => {
+        KeyMode::Password { salt, params } => {
             let password = keys.password(false)?.to_string();
-            (crypto::derive_key(&password, &salt)?, true)
+            (crypto::derive_key(&password, &salt, &params)?, true)
         }
     };
     let plaintext =
@@ -93,8 +93,9 @@ pub fn seal_entry(
     let encfile = if password_mode {
         let password = keys.password(false)?.to_string();
         let salt = crypto::random_bytes::<SALT_LEN>();
-        let key = crypto::derive_key(&password, &salt)?;
-        crypto::seal(&key, plaintext, &aad_for(rel), KeyMode::Password { salt })?
+        let params = KdfParams::default();
+        let key = crypto::derive_key(&password, &salt, &params)?;
+        crypto::seal(&key, plaintext, &aad_for(rel), KeyMode::Password { salt, params })?
     } else {
         let key = keys.require_keychain()?;
         crypto::seal(&key, plaintext, &aad_for(rel), KeyMode::Keychain)?

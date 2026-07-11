@@ -13,12 +13,36 @@ pub const SALT_LEN: usize = 16;
 const MAGIC: &str = "SYMMETRY v1";
 const WRAP_COLS: usize = 76;
 
+/// Argon2id cost parameters. Pinned explicitly and recorded in the file
+/// header so a future change of defaults can't make old files undecryptable.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct KdfParams {
+    pub m_cost: u32,
+    pub t_cost: u32,
+    pub p_cost: u32,
+}
+
+impl Default for KdfParams {
+    fn default() -> Self {
+        // The argon2 crate's 0.5 defaults; files written before the header
+        // recorded parameters were encrypted with these.
+        KdfParams {
+            m_cost: 19456,
+            t_cost: 2,
+            p_cost: 1,
+        }
+    }
+}
+
 /// How the encryption key is obtained, recorded in the file header so
 /// decryption knows what to ask for.
 #[derive(Clone, PartialEq, Debug)]
 pub enum KeyMode {
     Keychain,
-    Password { salt: [u8; SALT_LEN] },
+    Password {
+        salt: [u8; SALT_LEN],
+        params: KdfParams,
+    },
 }
 
 pub struct EncFile {
@@ -33,10 +57,18 @@ pub fn random_bytes<const N: usize>() -> [u8; N] {
     buf
 }
 
-/// Derive a key from a password with Argon2id.
-pub fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LEN]> {
+/// Derive a key from a password with Argon2id using the given parameters.
+pub fn derive_key(password: &str, salt: &[u8], params: &KdfParams) -> Result<[u8; KEY_LEN]> {
+    let argon_params =
+        argon2::Params::new(params.m_cost, params.t_cost, params.p_cost, Some(KEY_LEN))
+            .map_err(|e| anyhow!("invalid argon2 parameters: {e}"))?;
+    let argon = argon2::Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        argon_params,
+    );
     let mut key = [0u8; KEY_LEN];
-    argon2::Argon2::default()
+    argon
         .hash_password_into(password.as_bytes(), salt, &mut key)
         .map_err(|e| anyhow!("key derivation failed: {e}"))?;
     Ok(key)
@@ -84,9 +116,13 @@ impl EncFile {
         out.push('\n');
         match &self.mode {
             KeyMode::Keychain => out.push_str("key: keychain\n"),
-            KeyMode::Password { salt } => {
+            KeyMode::Password { salt, params } => {
                 out.push_str("key: password\n");
                 out.push_str(&format!("salt: {}\n", B64.encode(salt)));
+                out.push_str(&format!(
+                    "argon2: m={},t={},p={}\n",
+                    params.m_cost, params.t_cost, params.p_cost
+                ));
             }
         }
         out.push_str(&format!("nonce: {}\n\n", B64.encode(self.nonce)));
@@ -108,6 +144,7 @@ impl EncFile {
         let mut key_kind = None;
         let mut salt = None;
         let mut nonce = None;
+        let mut params = None;
         for line in lines.by_ref() {
             let line = line.trim();
             if line.is_empty() {
@@ -121,6 +158,7 @@ impl EncFile {
                 "key" => key_kind = Some(value.to_string()),
                 "salt" => salt = Some(decode_fixed::<SALT_LEN>(value).context("invalid salt")?),
                 "nonce" => nonce = Some(decode_fixed::<NONCE_LEN>(value).context("invalid nonce")?),
+                "argon2" => params = Some(parse_kdf_params(value).context("invalid argon2 header")?),
                 // Ignore unknown headers for forward compatibility.
                 _ => {}
             }
@@ -128,7 +166,11 @@ impl EncFile {
 
         let mode = match (key_kind.as_deref(), salt) {
             (Some("keychain"), None) => KeyMode::Keychain,
-            (Some("password"), Some(salt)) => KeyMode::Password { salt },
+            // Files written before params were recorded used the defaults.
+            (Some("password"), Some(salt)) => KeyMode::Password {
+                salt,
+                params: params.unwrap_or_default(),
+            },
             (Some("password"), None) => bail!("password-encrypted file is missing its salt"),
             (Some(other), _) => bail!("unknown key mode: {other}"),
             (None, _) => bail!("missing key header"),
@@ -147,6 +189,28 @@ impl EncFile {
             ciphertext,
         })
     }
+}
+
+/// Parse "m=19456,t=2,p=1".
+fn parse_kdf_params(value: &str) -> Result<KdfParams> {
+    let mut out = KdfParams::default();
+    for part in value.split(',') {
+        let (name, num) = part
+            .trim()
+            .split_once('=')
+            .with_context(|| format!("malformed argon2 parameter: {part}"))?;
+        let num: u32 = num
+            .trim()
+            .parse()
+            .with_context(|| format!("malformed argon2 parameter: {part}"))?;
+        match name.trim() {
+            "m" => out.m_cost = num,
+            "t" => out.t_cost = num,
+            "p" => out.p_cost = num,
+            other => bail!("unknown argon2 parameter: {other}"),
+        }
+    }
+    Ok(out)
 }
 
 fn decode_fixed<const N: usize>(value: &str) -> Result<[u8; N]> {
@@ -206,14 +270,59 @@ mod tests {
     #[test]
     fn render_parse_roundtrip_password() {
         let salt = random_bytes::<SALT_LEN>();
-        let key = derive_key("correct horse", &salt).unwrap();
-        let enc = seal(&key, b"A=1\n", b".env", KeyMode::Password { salt }).unwrap();
+        // Cheap non-default params so the test is fast and proves they roundtrip.
+        let params = KdfParams {
+            m_cost: 64,
+            t_cost: 1,
+            p_cost: 1,
+        };
+        let key = derive_key("correct horse", &salt, &params).unwrap();
+        let enc = seal(&key, b"A=1\n", b".env", KeyMode::Password { salt, params }).unwrap();
         let parsed = EncFile::parse(&enc.render()).unwrap();
-        let KeyMode::Password { salt: parsed_salt } = parsed.mode else {
+        let KeyMode::Password {
+            salt: parsed_salt,
+            params: parsed_params,
+        } = parsed.mode
+        else {
             panic!("expected password mode");
         };
-        let key2 = derive_key("correct horse", &parsed_salt).unwrap();
+        assert_eq!(parsed_params, params);
+        let key2 = derive_key("correct horse", &parsed_salt, &parsed_params).unwrap();
         assert_eq!(open(&key2, &parsed, b".env").unwrap(), b"A=1\n");
+    }
+
+    #[test]
+    fn files_without_argon2_header_use_pinned_defaults() {
+        let salt = random_bytes::<SALT_LEN>();
+        let params = KdfParams::default();
+        let key = derive_key("pw", &salt, &params).unwrap();
+        let enc = seal(&key, b"A=1\n", b".env", KeyMode::Password { salt, params }).unwrap();
+        // Strip the argon2 header line, as files written by older versions have.
+        let text: String = enc
+            .render()
+            .lines()
+            .filter(|l| !l.starts_with("argon2:"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let parsed = EncFile::parse(&text).unwrap();
+        let KeyMode::Password {
+            params: parsed_params,
+            ..
+        } = parsed.mode
+        else {
+            panic!("expected password mode");
+        };
+        assert_eq!(parsed_params, KdfParams::default());
+        assert_eq!(open(&key, &parsed, b".env").unwrap(), b"A=1\n");
+    }
+
+    #[test]
+    fn rejects_malformed_argon2_header() {
+        assert!(parse_kdf_params("m=64,t=1,p=1").is_ok());
+        assert!(parse_kdf_params("m=64").is_ok());
+        assert!(parse_kdf_params("bogus").is_err());
+        assert!(parse_kdf_params("q=1").is_err());
+        assert!(parse_kdf_params("m=notanumber").is_err());
     }
 
     #[test]

@@ -15,6 +15,11 @@ const SKIP_DIRS: &[&str] = &[
     ".venv",
     "venv",
     "__pycache__",
+    ".next",
+    ".nuxt",
+    ".cache",
+    ".turbo",
+    ".output",
 ];
 
 /// Env files that are templates, not secrets.

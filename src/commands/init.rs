@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::auth;
 use crate::commands::encrypt::encrypt_targets;
@@ -145,9 +145,8 @@ fn store_key_for(choice: &KeyChoice, manifest: &Manifest) -> Result<()> {
             ui::ok("Password mode: you'll choose a password the first time you encrypt.");
         }
         KeyChoice::Keychain { strict } => {
-            let mut key = crypto::random_bytes::<KEY_LEN>();
+            let key = Zeroizing::new(crypto::random_bytes::<KEY_LEN>());
             let stored = keystore::store_key(&manifest.project_id, &key, *strict);
-            key.zeroize();
             match stored {
                 Ok(()) if *strict => {
                     ui::ok("Generated an encryption key in the system keychain.");

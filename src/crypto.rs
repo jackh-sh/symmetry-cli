@@ -5,6 +5,7 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use rand::RngCore;
 use rand::rngs::OsRng;
+use zeroize::Zeroizing;
 
 pub const KEY_LEN: usize = 32;
 pub const NONCE_LEN: usize = 24;
@@ -58,7 +59,11 @@ pub fn random_bytes<const N: usize>() -> [u8; N] {
 }
 
 /// Derive a key from a password with Argon2id using the given parameters.
-pub fn derive_key(password: &str, salt: &[u8], params: &KdfParams) -> Result<[u8; KEY_LEN]> {
+pub fn derive_key(
+    password: &str,
+    salt: &[u8],
+    params: &KdfParams,
+) -> Result<Zeroizing<[u8; KEY_LEN]>> {
     let argon_params =
         argon2::Params::new(params.m_cost, params.t_cost, params.p_cost, Some(KEY_LEN))
             .map_err(|e| anyhow!("invalid argon2 parameters: {e}"))?;
@@ -67,9 +72,9 @@ pub fn derive_key(password: &str, salt: &[u8], params: &KdfParams) -> Result<[u8
         argon2::Version::V0x13,
         argon_params,
     );
-    let mut key = [0u8; KEY_LEN];
+    let mut key = Zeroizing::new([0u8; KEY_LEN]);
     argon
-        .hash_password_into(password.as_bytes(), salt, &mut key)
+        .hash_password_into(password.as_bytes(), salt, &mut *key)
         .map_err(|e| anyhow!("key derivation failed: {e}"))?;
     Ok(key)
 }

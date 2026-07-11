@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::auth;
 use crate::crypto::{self, KEY_LEN, KdfParams, KeyMode, SALT_LEN};
@@ -16,19 +16,27 @@ pub const PASSWORD_ENV: &str = "SYMMETRY_PASSWORD";
 /// not in symmetry.toml — so it can't be switched off by editing a file.
 const STRICT_PREFIX: &str = "strict:";
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// Deliberately not `Copy`: copies of key material would escape the
+/// zeroize-on-drop below.
+#[derive(Clone, PartialEq, Debug)]
 pub struct StoredKey {
     pub key: [u8; KEY_LEN],
     pub strict: bool,
 }
 
-fn encode_payload(key: &[u8; KEY_LEN], strict: bool) -> String {
+impl Drop for StoredKey {
+    fn drop(&mut self) {
+        self.key.zeroize();
+    }
+}
+
+fn encode_payload(key: &[u8; KEY_LEN], strict: bool) -> Zeroizing<String> {
     let encoded = B64.encode(key);
-    if strict {
+    Zeroizing::new(if strict {
         format!("{STRICT_PREFIX}{encoded}")
     } else {
         encoded
-    }
+    })
 }
 
 fn decode_payload(payload: &str) -> Result<StoredKey> {
@@ -36,14 +44,15 @@ fn decode_payload(payload: &str) -> Result<StoredKey> {
         Some(rest) => (true, rest),
         None => (false, payload),
     };
-    let bytes = B64
+    let mut bytes = B64
         .decode(encoded)
         .context("keychain entry is not valid base64")?;
     let key = bytes
         .as_slice()
         .try_into()
-        .map_err(|_| anyhow::anyhow!("keychain entry has the wrong key length"))?;
-    Ok(StoredKey { key, strict })
+        .map_err(|_| anyhow::anyhow!("keychain entry has the wrong key length"));
+    bytes.zeroize();
+    Ok(StoredKey { key: key?, strict })
 }
 
 fn entry(project_id: &str) -> Result<keyring::Entry> {
@@ -62,7 +71,10 @@ pub fn store_key(project_id: &str, key: &[u8; KEY_LEN], strict: bool) -> Result<
 /// the keychain itself is unavailable.
 pub fn load_key(project_id: &str) -> Result<Option<StoredKey>> {
     match entry(project_id)?.get_password() {
-        Ok(payload) => Ok(Some(decode_payload(&payload)?)),
+        Ok(payload) => {
+            let payload = Zeroizing::new(payload);
+            Ok(Some(decode_payload(&payload)?))
+        }
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(err) => Err(err).context("failed to read the key from the system keychain"),
     }
@@ -74,10 +86,10 @@ pub struct KeySource {
     project_id: String,
     keychain: Option<Result<Option<StoredKey>, String>>,
     verified: bool,
-    password: Option<String>,
+    password: Option<Zeroizing<String>>,
     /// Password-derived keys by salt, so a batch of files sharing a salt
     /// runs Argon2 once instead of once per file.
-    derived: HashMap<[u8; SALT_LEN], [u8; KEY_LEN]>,
+    derived: HashMap<[u8; SALT_LEN], Zeroizing<[u8; KEY_LEN]>>,
     /// Salt and params for newly encrypted files, generated once per
     /// invocation (reuse across a batch is fine: files still get unique
     /// nonces, and one password would derive the same key anyway).
@@ -102,7 +114,7 @@ impl KeySource {
             .keychain
             .get_or_insert_with(|| load_key(&self.project_id).map_err(|err| format!("{err:#}")));
         match cached {
-            Ok(stored) => Ok(*stored),
+            Ok(stored) => Ok(stored.clone()),
             Err(msg) => bail!("{msg}"),
         }
     }
@@ -115,7 +127,7 @@ impl KeySource {
     /// The keychain key, None if the keychain works but holds no key for
     /// this project, or Err if the keychain is unavailable. Strict keys
     /// require passing OS user verification, once per invocation.
-    pub fn try_keychain(&mut self) -> Result<Option<[u8; KEY_LEN]>> {
+    pub fn try_keychain(&mut self) -> Result<Option<Zeroizing<[u8; KEY_LEN]>>> {
         let Some(stored) = self.load()? else {
             return Ok(None);
         };
@@ -123,10 +135,10 @@ impl KeySource {
             auth::verify_user("unlock this project's env encryption key")?;
             self.verified = true;
         }
-        Ok(Some(stored.key))
+        Ok(Some(Zeroizing::new(stored.key)))
     }
 
-    pub fn require_keychain(&mut self) -> Result<[u8; KEY_LEN]> {
+    pub fn require_keychain(&mut self) -> Result<Zeroizing<[u8; KEY_LEN]>> {
         self.try_keychain()?.context(
             "no key for this project in the system keychain; import one with \
              `symmetry key import <key>` (from `symmetry key export` on a machine that has it)",
@@ -139,21 +151,21 @@ impl KeySource {
         &mut self,
         salt: &[u8; SALT_LEN],
         params: &KdfParams,
-    ) -> Result<[u8; KEY_LEN]> {
+    ) -> Result<Zeroizing<[u8; KEY_LEN]>> {
         if let Some(key) = self.derived.get(salt) {
-            return Ok(*key);
+            return Ok(key.clone());
         }
         self.ensure_password(false)?;
-        let password = self.password.as_deref().expect("just set");
+        let password = self.password.as_ref().map(|p| p.as_str()).expect("just set");
         let key = crypto::derive_key(password, salt, params)?;
-        self.derived.insert(*salt, key);
+        self.derived.insert(*salt, key.clone());
         Ok(key)
     }
 
     /// Key mode and key for newly encrypted files, confirming the password
     /// on first use. One salt is generated per invocation so encrypting a
     /// batch of files derives the key once.
-    pub fn new_password_key(&mut self) -> Result<(KeyMode, [u8; KEY_LEN])> {
+    pub fn new_password_key(&mut self) -> Result<(KeyMode, Zeroizing<[u8; KEY_LEN]>)> {
         let (salt, params) = match self.fresh {
             Some(pair) => pair,
             None => {
@@ -171,18 +183,21 @@ impl KeySource {
     /// across files. `confirm` asks for it twice (use when encrypting).
     fn ensure_password(&mut self, confirm: bool) -> Result<()> {
         if self.password.is_none() {
-            if let Ok(pw) = std::env::var(PASSWORD_ENV)
+            if let Ok(pw) = std::env::var(PASSWORD_ENV).map(Zeroizing::new)
                 && !pw.is_empty()
             {
                 self.password = Some(pw);
             } else {
-                let pw = rpassword::prompt_password("Password: ")
-                    .context("failed to read password (set SYMMETRY_PASSWORD when non-interactive)")?;
+                let pw = Zeroizing::new(
+                    rpassword::prompt_password("Password: ").context(
+                        "failed to read password (set SYMMETRY_PASSWORD when non-interactive)",
+                    )?,
+                );
                 if pw.is_empty() {
                     bail!("password must not be empty");
                 }
                 if confirm {
-                    let again = rpassword::prompt_password("Confirm password: ")?;
+                    let again = Zeroizing::new(rpassword::prompt_password("Confirm password: ")?);
                     if pw != again {
                         bail!("passwords do not match");
                     }
@@ -191,20 +206,6 @@ impl KeySource {
             }
         }
         Ok(())
-    }
-}
-
-impl Drop for KeySource {
-    fn drop(&mut self) {
-        if let Some(Ok(Some(mut stored))) = self.keychain.take() {
-            stored.key.zeroize();
-        }
-        if let Some(mut pw) = self.password.take() {
-            pw.zeroize();
-        }
-        for (_, mut key) in self.derived.drain() {
-            key.zeroize();
-        }
     }
 }
 

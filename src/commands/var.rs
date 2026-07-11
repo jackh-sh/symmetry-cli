@@ -38,11 +38,11 @@ fn edit(
 
     let mut keys = KeySource::new(&manifest.project_id);
     if locked {
-        let (bytes, password_mode) = decrypt_entry_full(&root, &rel, &mut keys)?;
+        let (bytes, mode) = decrypt_entry_full(&root, &rel, &mut keys)?;
         let text = String::from_utf8(bytes)
             .with_context(|| format!("{} is not valid UTF-8", rel.display()))?;
         let (updated, action) = apply(&text)?;
-        seal_entry(&root, &rel, &mut keys, updated.as_bytes(), password_mode)?;
+        seal_entry(&root, &rel, &mut keys, updated.as_bytes(), &mode)?;
         ui::ok(format!("{action} in {} (encrypted)", ui::path(rel.display())));
         if plain.exists() {
             ui::warn(format!(

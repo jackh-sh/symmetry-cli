@@ -1,10 +1,12 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use zeroize::Zeroize;
 
 use crate::auth;
-use crate::crypto::KEY_LEN;
+use crate::crypto::{self, KEY_LEN, KdfParams, KeyMode, SALT_LEN};
 
 const SERVICE: &str = "symmetry";
 pub const PASSWORD_ENV: &str = "SYMMETRY_PASSWORD";
@@ -73,6 +75,13 @@ pub struct KeySource {
     keychain: Option<Result<Option<StoredKey>, String>>,
     verified: bool,
     password: Option<String>,
+    /// Password-derived keys by salt, so a batch of files sharing a salt
+    /// runs Argon2 once instead of once per file.
+    derived: HashMap<[u8; SALT_LEN], [u8; KEY_LEN]>,
+    /// Salt and params for newly encrypted files, generated once per
+    /// invocation (reuse across a batch is fine: files still get unique
+    /// nonces, and one password would derive the same key anyway).
+    fresh: Option<([u8; SALT_LEN], KdfParams)>,
 }
 
 impl KeySource {
@@ -82,6 +91,8 @@ impl KeySource {
             keychain: None,
             verified: false,
             password: None,
+            derived: HashMap::new(),
+            fresh: None,
         }
     }
 
@@ -122,9 +133,43 @@ impl KeySource {
         )
     }
 
+    /// The key for an existing password-mode file; each distinct salt
+    /// derives at most once per invocation.
+    pub fn password_key(
+        &mut self,
+        salt: &[u8; SALT_LEN],
+        params: &KdfParams,
+    ) -> Result<[u8; KEY_LEN]> {
+        if let Some(key) = self.derived.get(salt) {
+            return Ok(*key);
+        }
+        self.ensure_password(false)?;
+        let password = self.password.as_deref().expect("just set");
+        let key = crypto::derive_key(password, salt, params)?;
+        self.derived.insert(*salt, key);
+        Ok(key)
+    }
+
+    /// Key mode and key for newly encrypted files, confirming the password
+    /// on first use. One salt is generated per invocation so encrypting a
+    /// batch of files derives the key once.
+    pub fn new_password_key(&mut self) -> Result<(KeyMode, [u8; KEY_LEN])> {
+        let (salt, params) = match self.fresh {
+            Some(pair) => pair,
+            None => {
+                self.ensure_password(true)?;
+                let pair = (crypto::random_bytes::<SALT_LEN>(), KdfParams::default());
+                self.fresh = Some(pair);
+                pair
+            }
+        };
+        let key = self.password_key(&salt, &params)?;
+        Ok((KeyMode::Password { salt, params }, key))
+    }
+
     /// The password from $SYMMETRY_PASSWORD or an interactive prompt, cached
     /// across files. `confirm` asks for it twice (use when encrypting).
-    pub fn password(&mut self, confirm: bool) -> Result<&str> {
+    fn ensure_password(&mut self, confirm: bool) -> Result<()> {
         if self.password.is_none() {
             if let Ok(pw) = std::env::var(PASSWORD_ENV)
                 && !pw.is_empty()
@@ -145,7 +190,7 @@ impl KeySource {
                 self.password = Some(pw);
             }
         }
-        Ok(self.password.as_deref().expect("just set"))
+        Ok(())
     }
 }
 
@@ -156,6 +201,9 @@ impl Drop for KeySource {
         }
         if let Some(mut pw) = self.password.take() {
             pw.zeroize();
+        }
+        for (_, mut key) in self.derived.drain() {
+            key.zeroize();
         }
     }
 }

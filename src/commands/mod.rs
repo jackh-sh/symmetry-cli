@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::cli::{Command, KeyAction};
-use crate::crypto::{self, EncFile, KdfParams, KeyMode, SALT_LEN};
+use crate::crypto::{self, EncFile, KeyMode};
 use crate::keystore::KeySource;
 use crate::manifest::{Manifest, rel_to_root};
 
@@ -59,47 +59,41 @@ pub fn decrypt_entry(root: &Path, rel: &Path, keys: &mut KeySource) -> Result<Ve
     Ok(decrypt_entry_full(root, rel, keys)?.0)
 }
 
-/// Like `decrypt_entry`, but also reports whether the file was in password
-/// mode so it can be re-encrypted the same way.
+/// Like `decrypt_entry`, but also returns the file's key mode so it can be
+/// re-encrypted the same way.
 pub fn decrypt_entry_full(
     root: &Path,
     rel: &Path,
     keys: &mut KeySource,
-) -> Result<(Vec<u8>, bool)> {
+) -> Result<(Vec<u8>, KeyMode)> {
     let path = enc_path(&root.join(rel));
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let enc = EncFile::parse(&text).with_context(|| format!("in {}", path.display()))?;
-    let (key, password_mode) = match enc.mode {
-        KeyMode::Keychain => (keys.require_keychain()?, false),
-        KeyMode::Password { salt, params } => {
-            let password = keys.password(false)?.to_string();
-            (crypto::derive_key(&password, &salt, &params)?, true)
-        }
+    let key = match &enc.mode {
+        KeyMode::Keychain => keys.require_keychain()?,
+        KeyMode::Password { salt, params } => keys.password_key(salt, params)?,
     };
     let plaintext =
         crypto::open(&key, &enc, &aad_for(rel)).with_context(|| format!("in {}", path.display()))?;
-    Ok((plaintext, password_mode))
+    Ok((plaintext, enc.mode))
 }
 
 /// Encrypt `plaintext` to `rel`'s .enc file, keeping the key mode it had.
+/// Password mode reuses the file's salt: the same password derives the same
+/// key (a cache hit here), and secrecy comes from the fresh nonce.
 pub fn seal_entry(
     root: &Path,
     rel: &Path,
     keys: &mut KeySource,
     plaintext: &[u8],
-    password_mode: bool,
+    mode: &KeyMode,
 ) -> Result<()> {
-    let encfile = if password_mode {
-        let password = keys.password(false)?.to_string();
-        let salt = crypto::random_bytes::<SALT_LEN>();
-        let params = KdfParams::default();
-        let key = crypto::derive_key(&password, &salt, &params)?;
-        crypto::seal(&key, plaintext, &aad_for(rel), KeyMode::Password { salt, params })?
-    } else {
-        let key = keys.require_keychain()?;
-        crypto::seal(&key, plaintext, &aad_for(rel), KeyMode::Keychain)?
+    let key = match mode {
+        KeyMode::Keychain => keys.require_keychain()?,
+        KeyMode::Password { salt, params } => keys.password_key(salt, params)?,
     };
+    let encfile = crypto::seal(&key, plaintext, &aad_for(rel), mode.clone())?;
     let path = enc_path(&root.join(rel));
     std::fs::write(&path, encfile.render())
         .with_context(|| format!("failed to write {}", path.display()))

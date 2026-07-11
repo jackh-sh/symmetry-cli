@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::commands::{aad_for, enc_path, strip_enc};
-use crate::crypto::{self, KdfParams, KeyMode, SALT_LEN};
+use crate::crypto::{self, KeyMode};
 use crate::keystore::{KeySource, PASSWORD_ENV};
 use crate::manifest::{rel_to_root, require_project};
 use crate::ui;
@@ -80,11 +80,8 @@ pub(super) fn encrypt_targets(
         let encfile = match keychain_key {
             Some(key) => crypto::seal(&key, &plaintext, &aad, KeyMode::Keychain)?,
             None => {
-                let password = keys.password(true)?.to_string();
-                let salt = crypto::random_bytes::<SALT_LEN>();
-                let params = KdfParams::default();
-                let key = crypto::derive_key(&password, &salt, &params)?;
-                crypto::seal(&key, &plaintext, &aad, KeyMode::Password { salt, params })?
+                let (mode, key) = keys.new_password_key()?;
+                crypto::seal(&key, &plaintext, &aad, mode)?
             }
         };
         std::fs::write(&enc, encfile.render())

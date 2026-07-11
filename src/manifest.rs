@@ -9,8 +9,23 @@ pub const MANIFEST_NAME: &str = "symmetry.toml";
 pub struct Manifest {
     pub version: u32,
     pub project_id: String,
+    /// Terminal color: "auto" (default), "always", or "never" (boring mode).
+    #[serde(default)]
+    pub color: ColorChoice,
     #[serde(default)]
     pub files: Vec<FileEntry>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Default, PartialEq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorChoice {
+    /// Color when the terminal supports it, plain when piped.
+    #[default]
+    Auto,
+    /// Always emit color codes.
+    Always,
+    /// Never emit color codes (boring mode).
+    Never,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -23,6 +38,7 @@ impl Manifest {
         Manifest {
             version: 1,
             project_id: uuid::Uuid::new_v4().to_string(),
+            color: ColorChoice::default(),
             files: files
                 .into_iter()
                 .map(|path| FileEntry { path })
@@ -56,6 +72,17 @@ impl Manifest {
     pub fn paths(&self) -> Vec<PathBuf> {
         self.files.iter().map(|f| f.path.clone()).collect()
     }
+}
+
+/// The color preference from the nearest manifest, or Auto if there's no
+/// manifest or it can't be read. Cheap enough to call once at startup.
+pub fn color_choice_from_cwd() -> ColorChoice {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| find_root(&cwd))
+        .and_then(|root| Manifest::load(&root).ok())
+        .map(|m| m.color)
+        .unwrap_or_default()
 }
 
 /// Walk up from `start` looking for a directory containing symmetry.toml.

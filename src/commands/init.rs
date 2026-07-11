@@ -10,6 +10,7 @@ use crate::crypto::{self, KEY_LEN};
 use crate::keystore::{self, KeySource};
 use crate::manifest::{MANIFEST_NAME, Manifest, find_root};
 use crate::scan;
+use crate::ui;
 
 const GITIGNORE_BLOCK: &str = "\
 # symmetry: keep plaintext env files out of git, but commit encrypted ones
@@ -72,44 +73,47 @@ pub fn init(password: bool, strict: bool, yes: bool) -> Result<()> {
 
     match choice {
         KeyChoice::Password => {
-            println!("Password mode: you'll choose a password the first time you encrypt.");
+            ui::ok("Password mode: you'll choose a password the first time you encrypt.");
         }
         KeyChoice::Keychain { strict } => {
             let mut key = crypto::random_bytes::<KEY_LEN>();
             let stored = keystore::store_key(&manifest.project_id, &key, strict);
             key.zeroize();
             match stored {
-                Ok(()) if strict => println!(
-                    "Generated an encryption key in the system keychain (strict mode: \
-                     every use requires user verification)."
-                ),
-                Ok(()) => println!(
-                    "Generated an encryption key and stored it in the system keychain."
-                ),
+                Ok(()) if strict => {
+                    ui::ok("Generated an encryption key in the system keychain.");
+                    ui::detail("Strict mode: every use requires user verification.");
+                }
+                Ok(()) => ui::ok("Generated an encryption key and stored it in the system keychain."),
                 Err(err) => {
-                    eprintln!("warning: {err:#}");
-                    println!("Falling back to password mode: you'll choose a password when encrypting.");
+                    ui::warn(format!("{err:#}"));
+                    ui::detail("Falling back to password mode: you'll choose a password when encrypting.");
                 }
             }
         }
     }
 
     manifest.save(&cwd)?;
-    println!("Wrote {MANIFEST_NAME}");
+    ui::ok(format!("Wrote {}", ui::path(MANIFEST_NAME)));
     update_gitignore(&cwd)?;
 
     if selected.is_empty() {
-        println!("No .env files found. Create one and run `symmetry encrypt <path>` to manage it.");
+        ui::heading("No .env files found");
+        ui::hint(format!(
+            "Create one, then run {} to manage it.",
+            ui::strong("symmetry encrypt <path>")
+        ));
         return Ok(());
     }
-    println!("Managing {} env file(s):", selected.len());
+    ui::heading(format!("Managing {} env file(s)", selected.len()));
     for file in &selected {
-        println!("  {}", file.display());
+        ui::item(ui::path(file.display()));
     }
 
     let encrypt_now = if yes {
         true
     } else if interactive {
+        println!();
         dialoguer::Confirm::new()
             .with_prompt(format!(
                 "Encrypt {} file(s) now? Plaintext will be replaced by .enc files",
@@ -122,10 +126,14 @@ pub fn init(password: bool, strict: bool, yes: bool) -> Result<()> {
     };
 
     if encrypt_now {
+        println!();
         let mut keys = KeySource::new(&manifest.project_id);
         encrypt_targets(&cwd, &mut keys, &selected, false)?;
     } else {
-        println!("Run `symmetry encrypt` when you're ready to encrypt them.");
+        ui::hint(format!(
+            "Run {} when you're ready to encrypt them.",
+            ui::strong("symmetry encrypt")
+        ));
     }
     Ok(())
 }
@@ -168,6 +176,9 @@ fn update_gitignore(root: &Path) -> Result<()> {
     }
     out.push_str(GITIGNORE_BLOCK);
     std::fs::write(&path, out).context("failed to update .gitignore")?;
-    println!("Updated .gitignore (plaintext env files stay ignored, *.enc gets committed)");
+    ui::ok(format!(
+        "Updated {} (plaintext env files stay ignored, *.enc gets committed)",
+        ui::path(".gitignore")
+    ));
     Ok(())
 }

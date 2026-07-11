@@ -6,6 +6,7 @@ use crate::commands::{decrypt_entry_full, enc_path, resolve_target, seal_entry};
 use crate::envfile;
 use crate::keystore::KeySource;
 use crate::manifest::require_project;
+use crate::ui;
 
 pub fn set(key: &str, value: &str, file: Option<PathBuf>) -> Result<()> {
     validate_key(key)?;
@@ -41,12 +42,12 @@ fn edit(
             .with_context(|| format!("{} is not valid UTF-8", rel.display()))?;
         let (updated, action) = apply(&text)?;
         seal_entry(&root, &rel, &mut keys, updated.as_bytes(), password_mode)?;
-        println!("{action} in {} (encrypted)", rel.display());
+        ui::ok(format!("{action} in {} (encrypted)", ui::path(rel.display())));
         if plain.exists() {
-            eprintln!(
-                "note: a plaintext copy of {} is also on disk and was not changed",
-                rel.display()
-            );
+            ui::warn(format!(
+                "a plaintext copy of {} is also on disk and was not changed",
+                ui::path(rel.display())
+            ));
         }
     } else {
         if !plain.exists() {
@@ -57,7 +58,10 @@ fn edit(
         let (updated, action) = apply(&text)?;
         std::fs::write(&plain, updated)
             .with_context(|| format!("failed to write {}", plain.display()))?;
-        println!("{action} in {} (plaintext, not yet encrypted)", rel.display());
+        ui::ok(format!(
+            "{action} in {} (plaintext, not yet encrypted)",
+            ui::path(rel.display())
+        ));
     }
     Ok(())
 }

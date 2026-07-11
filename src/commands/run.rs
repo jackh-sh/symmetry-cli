@@ -6,6 +6,7 @@ use crate::commands::{decrypt_entry, enc_path, resolve_target};
 use crate::envfile;
 use crate::keystore::KeySource;
 use crate::manifest::require_project;
+use crate::ui;
 
 pub fn run(file: Option<PathBuf>, all: bool, command: Vec<String>) -> Result<()> {
     let (root, manifest) = require_project()?;
@@ -30,10 +31,10 @@ pub fn run(file: Option<PathBuf>, all: bool, command: Vec<String>) -> Result<()>
             if !plain.exists() {
                 bail!("{} has no encrypted or plaintext version", rel.display());
             }
-            eprintln!(
-                "warning: {} is not encrypted yet, using the plaintext file",
-                rel.display()
-            );
+            ui::warn(format!(
+                "{} is not encrypted yet, using the plaintext file",
+                ui::path(rel.display())
+            ));
             std::fs::read(&plain)?
         };
         vars.extend(envfile::parse(&bytes).with_context(|| format!("in {}", rel.display()))?);

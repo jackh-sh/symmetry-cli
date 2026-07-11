@@ -6,12 +6,13 @@ use crate::cli::StrictMode;
 use crate::crypto::KEY_LEN;
 use crate::keystore::{self, KeySource};
 use crate::manifest::require_project;
+use crate::ui;
 
 pub fn export() -> Result<()> {
     let (_root, manifest) = require_project()?;
     // require_keychain enforces strict-mode verification before release.
     let key = KeySource::new(&manifest.project_id).require_keychain()?;
-    eprintln!("warning: this is the project's secret key; share it only over a secure channel");
+    ui::warn("this is the project's secret key; share it only over a secure channel");
     println!("{}", B64.encode(key));
     Ok(())
 }
@@ -30,9 +31,9 @@ pub fn import(key: &str, strict: bool) -> Result<()> {
         .map_err(|_| anyhow!("key must be {KEY_LEN} bytes, got {}", bytes.len()))?;
     keystore::store_key(&manifest.project_id, &key, strict)?;
     if strict {
-        println!("Key imported into the system keychain with strict mode on.");
+        ui::ok("Key imported into the system keychain with strict mode on.");
     } else {
-        println!("Key imported into the system keychain.");
+        ui::ok("Key imported into the system keychain.");
     }
     Ok(())
 }
@@ -48,7 +49,10 @@ pub fn strict(mode: StrictMode) -> Result<()> {
         bail!("no keychain key for this project; strict mode applies to keychain keys only");
     };
     if stored.strict == target {
-        println!("Strict mode is already {}.", if target { "on" } else { "off" });
+        ui::detail(format!(
+            "Strict mode is already {}.",
+            if target { "on" } else { "off" }
+        ));
         return Ok(());
     }
 
@@ -57,9 +61,9 @@ pub fn strict(mode: StrictMode) -> Result<()> {
     let key = KeySource::new(&manifest.project_id).require_keychain()?;
     keystore::store_key(&manifest.project_id, &key, target)?;
     if target {
-        println!("Strict mode on: every key use now requires user verification.");
+        ui::ok("Strict mode on: every key use now requires user verification.");
     } else {
-        println!("Strict mode off.");
+        ui::ok("Strict mode off.");
     }
     Ok(())
 }

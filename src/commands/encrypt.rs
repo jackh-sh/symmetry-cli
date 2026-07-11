@@ -6,6 +6,7 @@ use crate::commands::{aad_for, enc_path, strip_enc};
 use crate::crypto::{self, KeyMode, SALT_LEN};
 use crate::keystore::KeySource;
 use crate::manifest::{rel_to_root, require_project};
+use crate::ui;
 
 pub fn encrypt(paths: Vec<PathBuf>, keep: bool) -> Result<()> {
     let (root, mut manifest) = require_project()?;
@@ -29,7 +30,7 @@ pub fn encrypt(paths: Vec<PathBuf>, keep: bool) -> Result<()> {
     let mut keys = KeySource::new(&manifest.project_id);
     let encrypted = encrypt_targets(&root, &mut keys, &targets, keep)?;
     if encrypted > 0 && keep {
-        println!("Plaintext files kept (--keep); remember they're still on disk.");
+        ui::warn("Plaintext files kept (--keep); remember they're still on disk.");
     }
     Ok(())
 }
@@ -50,9 +51,9 @@ pub(super) fn encrypt_targets(
         let enc = enc_path(&plain);
         if !plain.exists() {
             if enc.exists() {
-                println!("{}: already encrypted", rel.display());
+                ui::detail(format!("{} already encrypted", rel.display()));
             } else {
-                eprintln!("warning: {} not found, skipping", rel.display());
+                ui::warn(format!("{} not found, skipping", ui::path(rel.display())));
             }
             continue;
         }
@@ -75,7 +76,12 @@ pub(super) fn encrypt_targets(
             std::fs::remove_file(&plain)
                 .with_context(|| format!("failed to remove {}", plain.display()))?;
         }
-        println!("encrypted {} -> {}.enc", rel.display(), rel.display());
+        ui::ok(format!(
+            "encrypted {} {} {}",
+            ui::path(rel.display()),
+            ui::dim("→"),
+            ui::path(format!("{}.enc", rel.display()))
+        ));
         encrypted += 1;
     }
     Ok(encrypted)

@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use crate::commands::{decrypt_entry, enc_path, strip_enc};
 use crate::keystore::KeySource;
 use crate::manifest::{rel_to_root, require_project};
+use crate::ui;
 
 pub fn decrypt(paths: Vec<PathBuf>, force: bool) -> Result<()> {
     let (root, manifest) = require_project()?;
@@ -25,14 +26,17 @@ pub fn decrypt(paths: Vec<PathBuf>, force: bool) -> Result<()> {
     for rel in targets {
         let plain = root.join(&rel);
         if !enc_path(&plain).exists() {
-            eprintln!("warning: no encrypted file for {}, skipping", rel.display());
+            ui::warn(format!(
+                "no encrypted file for {}, skipping",
+                ui::path(rel.display())
+            ));
             continue;
         }
         let plaintext = decrypt_entry(&root, &rel, &mut keys)?;
         if plain.exists() {
             let existing = std::fs::read(&plain)?;
             if existing == plaintext {
-                println!("{}: already decrypted", rel.display());
+                ui::detail(format!("{} already decrypted", rel.display()));
                 continue;
             }
             if !force {
@@ -44,7 +48,7 @@ pub fn decrypt(paths: Vec<PathBuf>, force: bool) -> Result<()> {
         }
         std::fs::write(&plain, &plaintext)
             .with_context(|| format!("failed to write {}", plain.display()))?;
-        println!("decrypted {}", rel.display());
+        ui::ok(format!("decrypted {}", ui::path(rel.display())));
     }
     Ok(())
 }

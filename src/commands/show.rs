@@ -6,6 +6,7 @@ use crate::commands::{decrypt_entry, enc_path, strip_enc};
 use crate::envfile;
 use crate::keystore::KeySource;
 use crate::manifest::{rel_to_root, require_project};
+use crate::ui;
 
 pub fn show(path: Option<PathBuf>, reveal: bool) -> Result<()> {
     let (root, manifest) = require_project()?;
@@ -41,25 +42,37 @@ pub fn show(path: Option<PathBuf>, reveal: bool) -> Result<()> {
         } else if plain.exists() {
             (std::fs::read(&plain)?, "unlocked")
         } else {
-            eprintln!("warning: {} is missing, skipping", rel.display());
+            ui::warn(format!("{} is missing, skipping", ui::path(rel.display())));
             continue;
         };
 
-        println!("{} ({state})", rel.display());
+        println!("\n{} ({})", ui::path(rel.display()), ui::state(state));
         let vars = envfile::parse(&bytes)?;
         if vars.is_empty() {
-            println!("  (empty)");
+            ui::detail("(empty)");
         } else {
             let width = vars.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
             for (key, value) in vars {
-                let shown = if reveal { value } else { mask(&value) };
-                println!("  {key:<width$} = {shown}");
+                let pad = " ".repeat(width.saturating_sub(key.len()));
+                if reveal {
+                    println!("  {}{pad} {} {value}", ui::var(&key), ui::dim("="));
+                } else {
+                    println!(
+                        "  {}{pad} {} {}",
+                        ui::var(&key),
+                        ui::dim("="),
+                        ui::dim(mask(&value))
+                    );
+                }
             }
         }
-        println!();
     }
     if !reveal {
-        println!("Values are masked; pass --reveal to print them.");
+        println!();
+        ui::hint(format!(
+            "Values are masked; pass {} to print them.",
+            ui::strong("--reveal")
+        ));
     }
     Ok(())
 }

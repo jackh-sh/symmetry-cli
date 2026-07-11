@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::commands::{decrypt_entry, enc_path, strip_enc};
 use crate::fsutil;
@@ -35,7 +35,8 @@ pub fn decrypt(paths: Vec<PathBuf>, force: bool) -> Result<()> {
         }
         let plaintext = decrypt_entry(&root, &rel, &mut keys)?;
         if plain.exists() {
-            let existing = std::fs::read(&plain)?;
+            let existing = std::fs::read(&plain)
+                .with_context(|| format!("failed to read {}", plain.display()))?;
             if existing == plaintext {
                 ui::detail(format!("{} already decrypted", rel.display()));
                 continue;

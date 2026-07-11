@@ -16,8 +16,14 @@ One binary. No server, no account, no daemon.
 curl -fsSL https://raw.githubusercontent.com/jackh-sh/symmetry-cli/main/scripts/install.sh | sh
 ```
 
-Prebuilt binaries for macOS and Linux (arm64 and x86_64), verified by
-checksum and release signature.
+On Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/jackh-sh/symmetry-cli/main/scripts/install.ps1 | iex
+```
+
+Prebuilt binaries for macOS and Linux (arm64 and x86_64) and Windows
+(x86_64), verified by checksum and release signature.
 As always, [read the script](scripts/install.sh) before piping it to your
 shell. To build from source instead, clone this repo and run
 `./scripts/dev-install.sh` (needs Rust).

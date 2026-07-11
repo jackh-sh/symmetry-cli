@@ -105,7 +105,9 @@ case "$os" in
             aarch64 | arm64) target="aarch64-unknown-linux-gnu" ;;
             *) err "unsupported Linux architecture: $arch" ;;
         esac ;;
-    *) err "unsupported OS: $os (on Windows, install with 'cargo install' from source)" ;;
+    MINGW* | MSYS* | CYGWIN*)
+        err "on Windows, use the PowerShell installer: irm https://raw.githubusercontent.com/$REPO/main/scripts/install.ps1 | iex" ;;
+    *) err "unsupported OS: $os" ;;
 esac
 
 asset="symmetry-$target.tar.gz"

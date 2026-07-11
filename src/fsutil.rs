@@ -14,6 +14,8 @@ pub fn write_atomic(path: &Path, bytes: &[u8], secret: bool) -> Result<()> {
             _ => Path::new("."),
         };
         let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+        #[cfg(not(unix))]
+        let _ = secret;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

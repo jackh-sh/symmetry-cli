@@ -23,6 +23,8 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -38,9 +40,14 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package
+        shell: bash
         run: |
+          case "${{ matrix.target }}" in
+            *windows*) bin="symmetry.exe" ;;
+            *) bin="symmetry" ;;
+          esac
           asset="symmetry-${{ matrix.target }}.tar.gz"
-          tar -czf "$asset" -C "target/${{ matrix.target }}/release" symmetry
+          tar -czf "$asset" -C "target/${{ matrix.target }}/release" "$bin"
           if command -v sha256sum >/dev/null; then
             sha256sum "$asset" > "$asset.sha256"
           else

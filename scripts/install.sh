@@ -9,6 +9,7 @@
 #   SYMMETRY_VERSION      Release tag, e.g. v0.1.0 (default: latest)
 #   SYMMETRY_INSTALL_DIR  Where to put the binary (default: ~/.local/bin)
 #   SYMMETRY_NO_SIGN=1    Skip stable macOS code signing
+#   SYMMETRY_NO_VERIFY=1  Install even if the release has no checksum file
 #
 # Contributors building from a checkout should use scripts/dev-install.sh instead.
 #
@@ -127,8 +128,10 @@ if curl -fsSL --proto '=https' -o "$tmp/$asset.sha256" "$base/$asset.sha256" 2>/
         fi
     ) || err "checksum verification failed for $asset"
     say "Checksum verified."
+elif [ "${SYMMETRY_NO_VERIFY:-0}" = "1" ]; then
+    say "warning: release has no checksum file; skipping verification (SYMMETRY_NO_VERIFY=1)"
 else
-    say "warning: release has no checksum file; skipping verification"
+    err "release has no checksum file; refusing to install (set SYMMETRY_NO_VERIFY=1 to override)"
 fi
 
 tar -xzf "$tmp/$asset" -C "$tmp"

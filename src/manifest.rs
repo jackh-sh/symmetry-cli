@@ -1,11 +1,12 @@
 use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 pub const MANIFEST_NAME: &str = "symmetry.toml";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Manifest {
     pub version: u32,
     pub project_id: String,
@@ -28,7 +29,7 @@ pub enum ColorChoice {
     Never,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct FileEntry {
     pub path: PathBuf,
 }
@@ -74,15 +75,38 @@ impl Manifest {
     }
 }
 
+/// The project as located from the current directory, resolved once per
+/// invocation (startup color configuration and the command itself share it).
+enum Project {
+    Found(PathBuf, Manifest),
+    Missing,
+    Invalid(String),
+}
+
+static PROJECT: OnceLock<Project> = OnceLock::new();
+
+fn project() -> &'static Project {
+    PROJECT.get_or_init(|| {
+        let Ok(cwd) = std::env::current_dir() else {
+            return Project::Missing;
+        };
+        let Some(root) = find_root(&cwd) else {
+            return Project::Missing;
+        };
+        match Manifest::load(&root) {
+            Ok(manifest) => Project::Found(root, manifest),
+            Err(err) => Project::Invalid(format!("{err:#}")),
+        }
+    })
+}
+
 /// The color preference from the nearest manifest, or Auto if there's no
-/// manifest or it can't be read. Cheap enough to call once at startup.
+/// manifest or it can't be read.
 pub fn color_choice_from_cwd() -> ColorChoice {
-    std::env::current_dir()
-        .ok()
-        .and_then(|cwd| find_root(&cwd))
-        .and_then(|root| Manifest::load(&root).ok())
-        .map(|m| m.color)
-        .unwrap_or_default()
+    match project() {
+        Project::Found(_, manifest) => manifest.color,
+        _ => ColorChoice::default(),
+    }
 }
 
 /// Walk up from `start` looking for a directory containing symmetry.toml.
@@ -98,12 +122,13 @@ pub fn find_root(start: &Path) -> Option<PathBuf> {
 
 /// Locate the project root from the current directory and load its manifest.
 pub fn require_project() -> Result<(PathBuf, Manifest)> {
-    let cwd = std::env::current_dir()?;
-    let Some(root) = find_root(&cwd) else {
-        bail!("no {MANIFEST_NAME} found in this or any parent directory; run `symmetry init` first");
-    };
-    let manifest = Manifest::load(&root)?;
-    Ok((root, manifest))
+    match project() {
+        Project::Found(root, manifest) => Ok((root.clone(), manifest.clone())),
+        Project::Missing => bail!(
+            "no {MANIFEST_NAME} found in this or any parent directory; run `symmetry init` first"
+        ),
+        Project::Invalid(msg) => bail!("{msg}"),
+    }
 }
 
 /// Resolve a user-supplied path (relative to cwd or absolute) to a root-relative path.

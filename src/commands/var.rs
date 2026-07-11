@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::commands::{decrypt_entry_full, enc_path, resolve_target, seal_entry};
 use crate::envfile;
+use crate::fsutil;
 use crate::keystore::KeySource;
 use crate::manifest::require_project;
 use crate::ui;
@@ -56,8 +57,7 @@ fn edit(
         let text = std::fs::read_to_string(&plain)
             .with_context(|| format!("failed to read {}", plain.display()))?;
         let (updated, action) = apply(&text)?;
-        std::fs::write(&plain, updated)
-            .with_context(|| format!("failed to write {}", plain.display()))?;
+        fsutil::write_secret(&plain, updated.as_bytes())?;
         ui::ok(format!(
             "{action} in {} (plaintext, not yet encrypted)",
             ui::path(rel.display())

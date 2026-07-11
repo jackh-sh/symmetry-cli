@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use crate::commands::{decrypt_entry, enc_path, strip_enc};
+use crate::fsutil;
 use crate::keystore::KeySource;
 use crate::manifest::{rel_to_root, require_project};
 use crate::ui;
@@ -46,8 +47,7 @@ pub fn decrypt(paths: Vec<PathBuf>, force: bool) -> Result<()> {
                 );
             }
         }
-        std::fs::write(&plain, &plaintext)
-            .with_context(|| format!("failed to write {}", plain.display()))?;
+        fsutil::write_secret(&plain, &plaintext)?;
         ui::ok(format!("decrypted {}", ui::path(rel.display())));
     }
     Ok(())

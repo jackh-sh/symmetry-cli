@@ -3,6 +3,7 @@ mod cli;
 mod commands;
 mod crypto;
 mod envfile;
+mod fsutil;
 mod keystore;
 mod manifest;
 mod scan;

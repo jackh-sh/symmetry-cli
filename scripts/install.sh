@@ -28,6 +28,15 @@ err() { printf 'error: %s\n' "$*" >&2; exit 1; }
 # ad-hoc signed, so every upgrade would get a new code identity and reset the
 # keychain "Always Allow" ACL; signing each install with the same local
 # certificate keeps macOS trusting it across upgrades.
+#
+# Trade-off, stated plainly: the signing key lives in your login keychain
+# pre-authorized for /usr/bin/codesign, so other software running as you
+# could sign itself as '$CERT_NAME' and inherit any "Always Allow" grant you
+# gave symmetry. That is weaker than per-binary trust, but no weaker than
+# your login-keychain security overall (user-level code can also read
+# non-strict keychain items directly). The key is imported non-extractable
+# so it can't simply be exported and copied elsewhere. Set SYMMETRY_NO_SIGN=1
+# to skip signing and accept a keychain prompt after each upgrade instead.
 create_cert() {
     say "Creating self-signed code-signing certificate '$CERT_NAME' (one-time)..."
     cat > "$tmp/openssl.cnf" << EOF
@@ -47,8 +56,9 @@ EOF
         -keyout "$tmp/key.pem" -out "$tmp/cert.pem" 2>/dev/null
 
     keychain="$HOME/Library/Keychains/login.keychain-db"
-    # -T pre-authorizes codesign to use the key without prompting each time.
-    security import "$tmp/key.pem" -k "$keychain" -T /usr/bin/codesign
+    # -x marks the private key non-extractable; -T pre-authorizes codesign
+    # to use it without prompting each time (see the trade-off note above).
+    security import "$tmp/key.pem" -k "$keychain" -x -T /usr/bin/codesign
     security import "$tmp/cert.pem" -k "$keychain"
     # Trust it for code signing (user domain). macOS asks for your password.
     say "macOS will now ask for your login password to trust the certificate."

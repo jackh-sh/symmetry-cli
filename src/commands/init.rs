@@ -36,85 +36,46 @@ pub fn init(password: bool, strict: bool, yes: bool) -> Result<()> {
         );
     }
     let interactive = !yes && std::io::stdin().is_terminal();
+    let theme = dialoguer::theme::ColorfulTheme::default();
 
+    ui::banner(
+        "symmetry",
+        "Encrypt your .env files and inject them into processes at runtime.",
+    );
+
+    // Step 1: which env files to manage.
+    ui::step(1, 3, "Files to manage");
     let found = scan::scan(&cwd)?;
-    let selected = choose_files(found, interactive)?;
-    let manifest = Manifest::new(selected.clone());
-
-    let choice = if password {
-        KeyChoice::Password
-    } else if strict {
-        require_strict_support()?;
-        KeyChoice::Keychain { strict: true }
-    } else if interactive {
-        let mut items = vec![
-            "System keychain (recommended): random key, unlocked with your login",
-            "Password (less secure): you type it every time symmetry needs the key",
-        ];
-        if auth::supported() {
-            items.insert(
-                1,
-                "System keychain, strict: Touch ID / Windows Hello / account password on every use",
-            );
-        }
-        let picked = dialoguer::Select::new()
-            .with_prompt("Where should the encryption key live?")
-            .items(&items)
-            .default(0)
-            .interact()?;
-        if picked == items.len() - 1 {
-            KeyChoice::Password
-        } else {
-            KeyChoice::Keychain { strict: picked == 1 }
-        }
+    let selected = choose_files(found, interactive, &theme)?;
+    if selected.is_empty() {
+        ui::detail("No .env files found in this directory yet.");
     } else {
-        KeyChoice::Keychain { strict: false }
-    };
-
-    match choice {
-        KeyChoice::Password => {
-            ui::ok("Password mode: you'll choose a password the first time you encrypt.");
-        }
-        KeyChoice::Keychain { strict } => {
-            let mut key = crypto::random_bytes::<KEY_LEN>();
-            let stored = keystore::store_key(&manifest.project_id, &key, strict);
-            key.zeroize();
-            match stored {
-                Ok(()) if strict => {
-                    ui::ok("Generated an encryption key in the system keychain.");
-                    ui::detail("Strict mode: every use requires user verification.");
-                }
-                Ok(()) => ui::ok("Generated an encryption key and stored it in the system keychain."),
-                Err(err) => {
-                    ui::warn(format!("{err:#}"));
-                    ui::detail("Falling back to password mode: you'll choose a password when encrypting.");
-                }
-            }
+        for file in &selected {
+            ui::item(ui::path(file.display()));
         }
     }
+    let manifest = Manifest::new(selected.clone());
+
+    // Step 2: where the encryption key lives.
+    ui::step(2, 3, "Encryption key");
+    let choice = choose_key(password, strict, interactive, &theme)?;
+    store_key_for(&choice, &manifest)?;
 
     manifest.save(&cwd)?;
     ui::ok(format!("Wrote {}", ui::path(MANIFEST_NAME)));
     update_gitignore(&cwd)?;
 
+    // Step 3: encrypt now (or defer).
+    ui::step(3, 3, "Encrypt");
     if selected.is_empty() {
-        ui::heading("No .env files found");
-        ui::hint(format!(
-            "Create one, then run {} to manage it.",
-            ui::strong("symmetry encrypt <path>")
-        ));
+        ui::detail("Nothing to encrypt yet.");
+        summary(&selected, false);
         return Ok(());
     }
-    ui::heading(format!("Managing {} env file(s)", selected.len()));
-    for file in &selected {
-        ui::item(ui::path(file.display()));
-    }
-
     let encrypt_now = if yes {
         true
     } else if interactive {
-        println!();
-        dialoguer::Confirm::new()
+        dialoguer::Confirm::with_theme(&theme)
             .with_prompt(format!(
                 "Encrypt {} file(s) now? Plaintext will be replaced by .enc files",
                 selected.len()
@@ -130,12 +91,101 @@ pub fn init(password: bool, strict: bool, yes: bool) -> Result<()> {
         let mut keys = KeySource::new(&manifest.project_id);
         encrypt_targets(&cwd, &mut keys, &selected, false)?;
     } else {
-        ui::hint(format!(
-            "Run {} when you're ready to encrypt them.",
-            ui::strong("symmetry encrypt")
-        ));
+        ui::detail("Skipped. Encrypt them whenever you're ready.");
+    }
+
+    summary(&selected, encrypt_now);
+    Ok(())
+}
+
+/// Decide where the key lives, prompting when interactive.
+fn choose_key(
+    password: bool,
+    strict: bool,
+    interactive: bool,
+    theme: &dialoguer::theme::ColorfulTheme,
+) -> Result<KeyChoice> {
+    if password {
+        return Ok(KeyChoice::Password);
+    }
+    if strict {
+        require_strict_support()?;
+        return Ok(KeyChoice::Keychain { strict: true });
+    }
+    if !interactive {
+        return Ok(KeyChoice::Keychain { strict: false });
+    }
+
+    let mut items = vec![
+        "System keychain (recommended) — random key, unlocked with your login",
+        "Password (less secure) — typed every time symmetry needs the key",
+    ];
+    if auth::supported() {
+        items.insert(
+            1,
+            "System keychain, strict — Touch ID / Windows Hello on every use",
+        );
+    }
+    let picked = dialoguer::Select::with_theme(theme)
+        .with_prompt("Where should the encryption key live?")
+        .items(&items)
+        .default(0)
+        .interact()?;
+    if picked == items.len() - 1 {
+        Ok(KeyChoice::Password)
+    } else {
+        Ok(KeyChoice::Keychain { strict: picked == 1 })
+    }
+}
+
+/// Generate and store the key (or announce password mode).
+fn store_key_for(choice: &KeyChoice, manifest: &Manifest) -> Result<()> {
+    match choice {
+        KeyChoice::Password => {
+            ui::ok("Password mode: you'll choose a password the first time you encrypt.");
+        }
+        KeyChoice::Keychain { strict } => {
+            let mut key = crypto::random_bytes::<KEY_LEN>();
+            let stored = keystore::store_key(&manifest.project_id, &key, *strict);
+            key.zeroize();
+            match stored {
+                Ok(()) if *strict => {
+                    ui::ok("Generated an encryption key in the system keychain.");
+                    ui::detail("Strict mode: every use requires user verification.");
+                }
+                Ok(()) => {
+                    ui::ok("Generated an encryption key and stored it in the system keychain.");
+                }
+                Err(err) => {
+                    ui::warn(format!("{err:#}"));
+                    ui::detail(
+                        "Falling back to password mode: you'll choose a password when encrypting.",
+                    );
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// Closing summary with next-step hints.
+fn summary(selected: &[PathBuf], encrypted: bool) {
+    ui::done("Setup complete");
+    if selected.is_empty() {
+        ui::hint(format!(
+            "Add a file: {}",
+            ui::strong("symmetry encrypt <path>")
+        ));
+        return;
+    }
+    if !encrypted {
+        ui::hint(format!("Encrypt now: {}", ui::strong("symmetry encrypt")));
+    }
+    ui::hint(format!(
+        "Run a command with secrets injected: {}",
+        ui::strong("symmetry run -- <cmd>")
+    ));
+    ui::hint(format!("Inspect variables: {}", ui::strong("symmetry show")));
 }
 
 pub(super) fn require_strict_support() -> Result<()> {
@@ -145,12 +195,16 @@ pub(super) fn require_strict_support() -> Result<()> {
     Ok(())
 }
 
-fn choose_files(found: Vec<PathBuf>, interactive: bool) -> Result<Vec<PathBuf>> {
+fn choose_files(
+    found: Vec<PathBuf>,
+    interactive: bool,
+    theme: &dialoguer::theme::ColorfulTheme,
+) -> Result<Vec<PathBuf>> {
     if found.len() <= 1 || !interactive {
         return Ok(found);
     }
     let items: Vec<String> = found.iter().map(|p| p.display().to_string()).collect();
-    let picks = dialoguer::MultiSelect::new()
+    let picks = dialoguer::MultiSelect::with_theme(theme)
         .with_prompt("Select the env files to manage (space toggles, enter confirms)")
         .items(&items)
         .defaults(&vec![true; items.len()])

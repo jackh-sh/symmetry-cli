@@ -49,6 +49,26 @@ pub fn heading(msg: impl std::fmt::Display) {
     println!("\n{}", style(msg).bold());
 }
 
+/// A one-line product banner for onboarding.
+pub fn banner(title: &str, tagline: &str) {
+    println!("\n  {} {}", style("✦").cyan().bold(), style(title).cyan().bold());
+    println!("  {}", style(tagline).dim());
+}
+
+/// A numbered step heading in a multi-step flow, e.g. "step 1/3  Files".
+pub fn step(n: usize, total: usize, title: &str) {
+    println!(
+        "\n{}  {}",
+        style(format!("step {n}/{total}")).cyan().bold(),
+        style(title).bold()
+    );
+}
+
+/// A green success heading marking the end of a flow.
+pub fn done(msg: impl std::fmt::Display) {
+    println!("\n{} {}", style("✓").green().bold(), style(msg).green().bold());
+}
+
 /// A suggested next step.
 pub fn hint(msg: impl std::fmt::Display) {
     println!("{} {msg}", style("→").cyan().bold());

@@ -11,6 +11,10 @@ use crate::crypto::{self, KEY_LEN, KdfParams, KeyMode, SALT_LEN};
 const SERVICE: &str = "symmetry";
 pub const PASSWORD_ENV: &str = "SYMMETRY_PASSWORD";
 
+/// Floor for newly chosen passwords. Existing passwords (decrypting, or
+/// supplied via $SYMMETRY_PASSWORD) are accepted as-is.
+const MIN_PASSWORD_LEN: usize = 8;
+
 /// Strict-mode keys demand OS user verification (Touch ID / Windows Hello /
 /// polkit) before each use. The marker lives inside the keychain payload —
 /// not in symmetry.toml — so it can't be switched off by editing a file.
@@ -197,6 +201,10 @@ impl KeySource {
                     bail!("password must not be empty");
                 }
                 if confirm {
+                    // A new password is being chosen; enforce a floor.
+                    if pw.chars().count() < MIN_PASSWORD_LEN {
+                        bail!("password must be at least {MIN_PASSWORD_LEN} characters");
+                    }
                     let again = Zeroizing::new(rpassword::prompt_password("Confirm password: ")?);
                     if pw != again {
                         bail!("passwords do not match");

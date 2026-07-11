@@ -1,4 +1,6 @@
-# Symmetry
+<p align="center">
+  <img src=".github/hero.png" alt="symmetry — seal your .env files" width="720">
+</p>
 
 Seal the `.env` files in your repo. Symmetry encrypts them to `.enc` siblings,
 keeps the encryption key in your OS keychain, and injects variables straight

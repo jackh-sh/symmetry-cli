@@ -69,8 +69,27 @@ jobs:
         with:
           merge-multiple: true
 
+      # SSH-sign each checksum file so installers can verify the release came
+      # from this project's key, not just that the download arrived intact.
+      # The matching public key is pinned in scripts/install.sh and install.ps1.
+      - name: Sign checksums
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::warning::RELEASE_SIGNING_KEY is not set; publishing unsigned release"
+            exit 0
+          fi
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > signing_key
+          for f in symmetry-*.tar.gz.sha256; do
+            ssh-keygen -Y sign -f signing_key -n symmetry-release "$f"
+          done
+          rm -f signing_key
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             symmetry-*.tar.gz
             symmetry-*.tar.gz.sha256
+            symmetry-*.tar.gz.sha256.sig

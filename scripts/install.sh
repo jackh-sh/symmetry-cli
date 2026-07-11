@@ -9,7 +9,7 @@
 #   SYMMETRY_VERSION      Release tag, e.g. v0.1.0 (default: latest)
 #   SYMMETRY_INSTALL_DIR  Where to put the binary (default: ~/.local/bin)
 #   SYMMETRY_NO_SIGN=1    Skip stable macOS code signing
-#   SYMMETRY_NO_VERIFY=1  Install even if the release has no checksum file
+#   SYMMETRY_NO_VERIFY=1  Install even without checksum/signature verification
 #
 # Contributors building from a checkout should use scripts/dev-install.sh instead.
 #
@@ -21,6 +21,10 @@ REPO="${SYMMETRY_REPO:-jackh-sh/symmetry-cli}"
 VERSION="${SYMMETRY_VERSION:-latest}"
 INSTALL_DIR="${SYMMETRY_INSTALL_DIR:-$HOME/.local/bin}"
 CERT_NAME="symmetry-dev"
+
+# Public key whose signature release checksums must carry (ssh-keygen -Y).
+# Rotating the release key means updating this line.
+SIGNING_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBKhBx3y2nLJBz/JltVJ7U4rhazQaOcGd7Rvy1FpsB/t"
 
 say() { printf '%s\n' "$*"; }
 err() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -118,7 +122,30 @@ say "Downloading symmetry ($VERSION, $target) from $REPO..."
 curl -fsSL --proto '=https' -o "$tmp/$asset" "$base/$asset" ||
     err "download failed: $base/$asset (is there a release with an asset for $target?)"
 
-if curl -fsSL --proto '=https' -o "$tmp/$asset.sha256" "$base/$asset.sha256" 2>/dev/null; then
+# Verify the SSH signature on the checksum file: it proves the checksums
+# (and so the binaries they cover) come from this project's release key,
+# not merely that the download arrived intact.
+verify_signature() {
+    if ! curl -fsSL --proto '=https' -o "$tmp/$asset.sha256.sig" "$base/$asset.sha256.sig" 2>/dev/null; then
+        say "warning: release has no signature (predates release signing); verifying checksum only"
+        return 0
+    fi
+    if ! command -v ssh-keygen >/dev/null 2>&1 ||
+        ssh-keygen -Y check-novalidate 2>&1 | grep -qiE 'unknown option|illegal option'; then
+        say "warning: ssh-keygen with signature support not found; skipping signature check"
+        return 0
+    fi
+    printf 'release@symmetry %s\n' "$SIGNING_PUBKEY" > "$tmp/allowed_signers"
+    ssh-keygen -Y verify -f "$tmp/allowed_signers" -I release@symmetry \
+        -n symmetry-release -s "$tmp/$asset.sha256.sig" < "$tmp/$asset.sha256" >/dev/null 2>&1 ||
+        err "signature verification failed for $asset.sha256"
+    say "Signature verified."
+}
+
+if [ "${SYMMETRY_NO_VERIFY:-0}" = "1" ]; then
+    say "warning: skipping checksum and signature verification (SYMMETRY_NO_VERIFY=1)"
+elif curl -fsSL --proto '=https' -o "$tmp/$asset.sha256" "$base/$asset.sha256" 2>/dev/null; then
+    verify_signature
     (
         cd "$tmp"
         if command -v sha256sum >/dev/null 2>&1; then
@@ -128,8 +155,6 @@ if curl -fsSL --proto '=https' -o "$tmp/$asset.sha256" "$base/$asset.sha256" 2>/
         fi
     ) || err "checksum verification failed for $asset"
     say "Checksum verified."
-elif [ "${SYMMETRY_NO_VERIFY:-0}" = "1" ]; then
-    say "warning: release has no checksum file; skipping verification (SYMMETRY_NO_VERIFY=1)"
 else
     err "release has no checksum file; refusing to install (set SYMMETRY_NO_VERIFY=1 to override)"
 fi

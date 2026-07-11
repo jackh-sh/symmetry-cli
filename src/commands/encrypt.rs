@@ -76,7 +76,7 @@ pub(super) fn encrypt_targets(
 
         let plaintext = std::fs::read(&plain)
             .with_context(|| format!("failed to read {}", plain.display()))?;
-        let aad = aad_for(rel);
+        let aad = aad_for(rel)?;
         let encfile = match &keychain_key {
             Some(key) => crypto::seal(key, &plaintext, &aad, KeyMode::Keychain)?,
             None => {

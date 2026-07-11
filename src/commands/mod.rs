@@ -36,21 +36,28 @@ pub fn dispatch(command: Command) -> Result<()> {
 
 /// apps/web/.env -> apps/web/.env.enc
 pub fn enc_path(plain: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.enc", plain.display()))
+    let mut name = plain.as_os_str().to_os_string();
+    name.push(".enc");
+    PathBuf::from(name)
 }
 
 /// Accept either form of a user-supplied path: apps/web/.env.enc -> apps/web/.env
 pub fn strip_enc(path: PathBuf) -> PathBuf {
-    match path.to_str().and_then(|s| s.strip_suffix(".enc")) {
-        Some(stripped) => PathBuf::from(stripped),
-        None => path,
+    if path.extension().is_some_and(|ext| ext == "enc") {
+        path.with_extension("")
+    } else {
+        path
     }
 }
 
 /// AAD binding a ciphertext to its root-relative location, with stable
-/// separators across platforms.
-pub fn aad_for(rel: &Path) -> Vec<u8> {
-    rel.to_string_lossy().replace('\\', "/").into_bytes()
+/// separators across platforms. Rejects non-UTF-8 paths rather than binding
+/// to a lossy rendering that another path could alias.
+pub fn aad_for(rel: &Path) -> Result<Vec<u8>> {
+    let rel = rel
+        .to_str()
+        .with_context(|| format!("path {} is not valid UTF-8", rel.display()))?;
+    Ok(rel.replace('\\', "/").into_bytes())
 }
 
 /// Read and decrypt `rel`'s .enc file, resolving the key according to the
@@ -74,8 +81,8 @@ pub fn decrypt_entry_full(
         KeyMode::Keychain => keys.require_keychain()?,
         KeyMode::Password { salt, params } => keys.password_key(salt, params)?,
     };
-    let plaintext =
-        crypto::open(&key, &enc, &aad_for(rel)).with_context(|| format!("in {}", path.display()))?;
+    let plaintext = crypto::open(&key, &enc, &aad_for(rel)?)
+        .with_context(|| format!("in {}", path.display()))?;
     Ok((plaintext, enc.mode))
 }
 
@@ -93,7 +100,7 @@ pub fn seal_entry(
         KeyMode::Keychain => keys.require_keychain()?,
         KeyMode::Password { salt, params } => keys.password_key(salt, params)?,
     };
-    let encfile = crypto::seal(&key, plaintext, &aad_for(rel), mode.clone())?;
+    let encfile = crypto::seal(&key, plaintext, &aad_for(rel)?, mode.clone())?;
     let path = enc_path(&root.join(rel));
     crate::fsutil::write_atomic(&path, encfile.render().as_bytes(), false)
 }
@@ -167,6 +174,23 @@ mod tests {
 
     fn paths(strs: &[&str]) -> Vec<PathBuf> {
         strs.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn enc_path_and_strip_enc_roundtrip() {
+        assert_eq!(
+            enc_path(Path::new("apps/web/.env")),
+            PathBuf::from("apps/web/.env.enc")
+        );
+        assert_eq!(
+            strip_enc(PathBuf::from("apps/web/.env.enc")),
+            PathBuf::from("apps/web/.env")
+        );
+        assert_eq!(
+            strip_enc(PathBuf::from(".env.local.enc")),
+            PathBuf::from(".env.local")
+        );
+        assert_eq!(strip_enc(PathBuf::from(".env")), PathBuf::from(".env"));
     }
 
     #[test]
